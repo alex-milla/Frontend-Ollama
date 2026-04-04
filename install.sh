@@ -184,9 +184,12 @@ log "Servicio systemd instalado y habilitado"
 
 # ── 11. Inicializar base de datos ──────────────────────────────────────────────
 info "Inicializando base de datos…"
-# Ejecuta como frontollama para que la BD tenga el propietario correcto
-sudo -u "$SERVICE_USER" "$INSTALL_DIR/venv/bin/python3" \
-    -c "from app.database import init_db; from app.config import Config; init_db(Config.DB_PATH)"
+# Ejecuta desde INSTALL_DIR para que Python encuentre el módulo 'app'
+sudo -u "$SERVICE_USER" bash -c "
+    cd '$INSTALL_DIR' && \
+    '$INSTALL_DIR/venv/bin/python3' -c \
+        'from app.database import init_db; from app.config import Config; init_db(Config.DB_PATH)'
+"
 chown "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR/data/ollama-chat.db" 2>/dev/null || true
 chmod 600 "$INSTALL_DIR/data/ollama-chat.db" 2>/dev/null || true
 log "Base de datos inicializada"
