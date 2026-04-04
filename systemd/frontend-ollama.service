@@ -5,49 +5,22 @@ After=network.target
 Wants=network.target
 
 [Service]
-# ── Usuario sin privilegios ────────────────────────────────────────────────
 User=frontollama
-Group=www-data
-
-# ── Rutas ──────────────────────────────────────────────────────────────────
+Group=frontollama
 WorkingDirectory=/opt/frontend-ollama
 ExecStart=/opt/frontend-ollama/venv/bin/gunicorn \
     --workers 2 \
     --worker-class sync \
     --timeout 120 \
     --keep-alive 5 \
-    --bind unix:/run/frontend-ollama/gunicorn.sock \
+    --bind unix:/opt/frontend-ollama/data/gunicorn.sock \
     --access-logfile /var/log/frontend-ollama/access.log \
     --error-logfile /var/log/frontend-ollama/error.log \
     --log-level info \
     "app:create_app()"
-
-# ── Socket runtime dir ─────────────────────────────────────────────────────
-RuntimeDirectory=frontend-ollama
-RuntimeDirectoryMode=0750
-
-# ── Reinicio automático ────────────────────────────────────────────────────
 Restart=on-failure
 RestartSec=5s
 StartLimitBurst=3
-
-# ── Hardening de seguridad ─────────────────────────────────────────────────
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/frontend-ollama/data /var/log/frontend-ollama /run/frontend-ollama
-
-PrivateDevices=true
-NoNewPrivileges=true
-CapabilityBoundingSet=
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-SystemCallFilter=@system-service
-SystemCallErrorNumber=EPERM
-ProtectProc=invisible
-ProcSubset=pid
 
 [Install]
 WantedBy=multi-user.target
