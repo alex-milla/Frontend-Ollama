@@ -163,9 +163,12 @@ chmod 700 "$INSTALL_DIR/data"
 chown root:"$SERVICE_USER" "$INSTALL_DIR/config.env"
 chmod 640 "$INSTALL_DIR/config.env"
 
-# venv y otros ficheros del repo
+# venv — directorios 750, ficheros 640, binarios 750 (deben ser ejecutables)
 chown -R root:"$SERVICE_USER" "$INSTALL_DIR/venv"
-chmod -R 750 "$INSTALL_DIR/venv"
+find "$INSTALL_DIR/venv" -type d -exec chmod 750 {} \;
+find "$INSTALL_DIR/venv" -type f -exec chmod 640 {} \;
+find "$INSTALL_DIR/venv/bin" -type f -exec chmod 750 {} \;
+# scripts con shebang fuera de bin/ (ej: activate) no necesitan +x
 
 # update.sh — solo root puede ejecutar
 chown root:root "$INSTALL_DIR/update.sh" 2>/dev/null || true
