@@ -1,0 +1,15 @@
+# Marca los scripts de shell como ejecutables en el índice de Git.
+# Git almacena el bit de ejecución; esto lo declara explícitamente.
+*.sh text eol=lf
+install.sh    text eol=lf
+update.sh     text eol=lf
+nginx/generate-cert.sh text eol=lf
+
+# Fuerza LF en todos los archivos de texto (evita CRLF en Windows)
+* text=auto eol=lf
+
+# Archivos binarios
+*.db  binary
+*.svg binary
+*.png binary
+*.zip binary

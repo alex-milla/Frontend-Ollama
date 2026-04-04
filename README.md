@@ -95,3 +95,15 @@ tail -f /var/log/frontend-ollama/access.log
 ## Licencia
 
 MIT
+
+## Setup del repositorio (solo la primera vez)
+
+Tras clonar y antes del primer commit, graba el bit de ejecución en el índice de Git:
+
+```bash
+git add install.sh update.sh nginx/generate-cert.sh .gitattributes
+git update-index --chmod=+x install.sh update.sh nginx/generate-cert.sh
+git commit -m "feat: initial commit with executable scripts"
+```
+
+Las releases posteriores lo gestionan automáticamente via GitHub Actions (`.github/workflows/release.yml`).

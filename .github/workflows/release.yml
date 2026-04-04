@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # necesario para crear releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Garantiza el bit de ejecución en el índice de Git ─────────────────
+      # Aunque git update-index debería persistirlo, lo reafirmamos aquí
+      # por si alguien hace un commit desde Windows que lo pierda.
+      - name: Marcar scripts como ejecutables
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git update-index --chmod=+x install.sh
+          git update-index --chmod=+x update.sh
+          git update-index --chmod=+x nginx/generate-cert.sh
+          # Si el índice cambió, commitea y empuja (raro, pero por seguridad)
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: restore executable bit on shell scripts [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      # ── Crea el tarball con permisos correctos ────────────────────────────
+      - name: Crear tarball de release
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DIRNAME="Frontend-Ollama-${VERSION}"
+
+          # Exporta el árbol limpio (sin .git) respetando los permisos del índice
+          git archive --format=tar --prefix="${DIRNAME}/" HEAD | gzip > "${DIRNAME}.tar.gz"
+
+          # Verifica que los scripts son ejecutables dentro del tarball
+          tar -tzf "${DIRNAME}.tar.gz" | grep "\.sh$"
+          echo "Verificando permisos dentro del tarball:"
+          tar -tvzf "${DIRNAME}.tar.gz" | grep "\.sh$"
+
+      # ── Publica la release en GitHub ──────────────────────────────────────
+      - name: Crear GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DIRNAME="Frontend-Ollama-${VERSION}"
+
+          gh release create "$GITHUB_REF_NAME" \
+            "${DIRNAME}.tar.gz" \
+            --title "Frontend-Ollama ${GITHUB_REF_NAME}" \
+            --notes "Release ${GITHUB_REF_NAME}. Instala con:
+          \`\`\`bash
+          bash <(curl -fsSL https://raw.githubusercontent.com/alex-milla/Frontend-Ollama/main/install.sh)
+          \`\`\`"
