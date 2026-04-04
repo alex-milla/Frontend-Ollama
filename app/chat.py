@@ -1,12 +1,8 @@
 """
-Blueprint de chat.
-- SSE para streaming de respuestas.
-- Historial en SQLite por usuario/conversación.
-- Export XML de conversaciones.
+Blueprint de chat con soporte de proyectos y system prompt de habilidades.
 """
 import json
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from flask import (
     Blueprint, Response, g, jsonify, request,
     render_template, stream_with_context, current_app
@@ -19,8 +15,7 @@ from . import models, ollama_client
 bp = Blueprint("chat", __name__)
 
 
-def _ollama_host() -> str:
-    """Lee el host de Ollama: primero BD (editable por admin), luego config."""
+def _ollama_host():
     db = get_db(current_app.config["DB_PATH"])
     host = models.get_setting(db, "ollama_host") or current_app.config["OLLAMA_HOST"]
     db.close()
@@ -60,8 +55,18 @@ def api_ollama_status():
 @bp.route("/api/conversations", methods=["GET"])
 @login_required
 def api_list_conversations():
+    project_id = request.args.get("project_id", type=int)
     db = get_db(current_app.config["DB_PATH"])
-    convs = models.list_conversations(db, g.user["id"])
+    if project_id:
+        convs = db.execute(
+            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations WHERE user_id=? AND project_id=? ORDER BY updated_at DESC",
+            (g.user["id"], project_id)
+        ).fetchall()
+    else:
+        convs = db.execute(
+            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations WHERE user_id=? AND project_id IS NULL ORDER BY updated_at DESC",
+            (g.user["id"],)
+        ).fetchall()
     db.close()
     return jsonify([dict(c) for c in convs])
 
@@ -70,9 +75,10 @@ def api_list_conversations():
 @login_required
 def api_create_conversation():
     data = request.get_json(silent=True) or {}
-    model = str(data.get("model", "")).strip()[:128]  # sanea longitud
+    model = str(data.get("model", "")).strip()[:128]
+    project_id = data.get("project_id")
     db = get_db(current_app.config["DB_PATH"])
-    conv_id = models.create_conversation(db, g.user["id"], model)
+    conv_id = models.create_conversation(db, g.user["id"], model, project_id)
     conv = models.get_conversation(db, conv_id, g.user["id"])
     db.close()
     return jsonify(dict(conv)), 201
@@ -114,7 +120,6 @@ def api_export_conversation(conv_id):
     db.close()
 
     root = ET.Element("conversation")
-
     meta = ET.SubElement(root, "metadata")
     ET.SubElement(meta, "title").text = conv["title"]
     ET.SubElement(meta, "model").text = conv["model"]
@@ -143,36 +148,54 @@ def api_export_conversation(conv_id):
 @login_required
 def api_chat():
     data = request.get_json(silent=True) or {}
-    conv_id = data.get("conversation_id")
-    model   = str(data.get("model", "")).strip()[:128]
-    content = str(data.get("message", "")).strip()
+    conv_id     = data.get("conversation_id")
+    model       = str(data.get("model", "")).strip()[:128]
+    content     = str(data.get("message", "")).strip()
+    project_id  = data.get("project_id")
+    # skill_ids: habilidades que el usuario ha activado para esta conversación
+    skill_ids   = data.get("skill_ids", [])
 
     if not content or not model:
         return jsonify({"error": "Faltan campos requeridos"}), 400
 
     db = get_db(current_app.config["DB_PATH"])
 
-    # Verificar que la conversación pertenece al usuario
     if conv_id:
         conv = models.get_conversation(db, conv_id, g.user["id"])
         if conv is None:
             db.close()
             return jsonify({"error": "Conversación no encontrada"}), 404
+        project_id = conv["project_id"]
     else:
-        conv_id = models.create_conversation(db, g.user["id"], model)
+        conv_id = models.create_conversation(db, g.user["id"], model, project_id)
 
-    # Guardar mensaje del usuario
     models.add_message(db, conv_id, "user", content)
 
-    # Autogenerar título de la conversación en el primer mensaje
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv["title"] == "Nueva conversación":
         title = content[:60] + ("…" if len(content) > 60 else "")
         models.update_conversation_title(db, conv_id, title)
 
-    # Cargar historial para contexto
     history = models.list_messages(db, conv_id)
     ollama_msgs = [{"role": m["role"], "content": m["content"]} for m in history]
+
+    # Inyectar system prompt: habilidades seleccionadas por el usuario
+    system_prompt = ""
+    if skill_ids:
+        # Habilidades seleccionadas manualmente para esta petición
+        parts = []
+        for sid in skill_ids:
+            skill = models.get_skill(db, sid, g.user["id"])
+            if skill:
+                parts.append(f"## {skill['name']}\n\n{skill['content']}")
+        system_prompt = "\n\n---\n\n".join(parts)
+    elif project_id:
+        # Fallback: todas las habilidades del proyecto
+        system_prompt = models.get_project_system_prompt(db, project_id)
+
+    if system_prompt:
+        ollama_msgs = [{"role": "system", "content": system_prompt}] + ollama_msgs
+
     db.close()
 
     host = _ollama_host()
@@ -183,7 +206,6 @@ def api_chat():
 
         for token in ollama_client.stream_chat(host, model, ollama_msgs):
             if token == "[DONE]":
-                # Guardar respuesta completa
                 response_text = "".join(full_response)
                 db2 = get_db(current_app.config["DB_PATH"])
                 models.add_message(db2, conv_id, "assistant", response_text)
@@ -201,10 +223,7 @@ def api_chat():
     return Response(
         stream_with_context(generate()),
         mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # deshabilita buffer en NGINX
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -217,10 +236,8 @@ def api_update_ollama():
     host = str(data.get("host", "")).strip()
     if not host:
         return jsonify({"error": "Host requerido"}), 400
-    # Validación mínima de URL
     if not (host.startswith("http://") or host.startswith("https://")):
         return jsonify({"error": "El host debe empezar con http:// o https://"}), 400
-
     db = get_db(current_app.config["DB_PATH"])
     models.set_setting(db, "ollama_host", host)
     db.close()
