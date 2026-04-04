@@ -1,0 +1,66 @@
+[Unit]
+Description=Frontend Ollama — Chat web con modelos Ollama
+Documentation=https://github.com/alex-milla/Frontend-Ollama
+After=network.target
+Wants=network.target
+
+[Service]
+# ── Usuario sin privilegios ────────────────────────────────────────────────
+User=frontollama
+Group=frontollama
+
+# ── Rutas ──────────────────────────────────────────────────────────────────
+WorkingDirectory=/opt/frontend-ollama
+ExecStart=/opt/frontend-ollama/venv/bin/gunicorn \
+    --workers 2 \
+    --worker-class sync \
+    --timeout 120 \
+    --keep-alive 5 \
+    --bind unix:/run/frontend-ollama/gunicorn.sock \
+    --access-logfile /var/log/frontend-ollama/access.log \
+    --error-logfile /var/log/frontend-ollama/error.log \
+    --log-level info \
+    "app:create_app()"
+
+# ── Socket runtime dir ─────────────────────────────────────────────────────
+RuntimeDirectory=frontend-ollama
+RuntimeDirectoryMode=0750
+
+# ── Reinicio automático ────────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# ── Hardening de seguridad ─────────────────────────────────────────────────
+# Limita acceso al sistema de archivos
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/frontend-ollama/data /var/log/frontend-ollama /run/frontend-ollama
+
+# Sin acceso a dispositivos de red innecesarios
+PrivateDevices=true
+
+# Sin capacidades de root
+NoNewPrivileges=true
+CapabilityBoundingSet=
+
+# Espacio de nombres privado
+PrivateTmp=true
+
+# Sin acceso a kernel
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+
+# Limita syscalls permitidas (perfil básico para aplicación Python)
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Sin acceso a directorios del sistema sensibles
+ProtectProc=invisible
+ProcSubset=pid
+
+[Install]
+WantedBy=multi-user.target

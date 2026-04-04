@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Chat · Frontend Ollama{% endblock %}
+
+{% block body %}
+<div class="app-shell">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar" aria-label="Conversaciones">
+
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+          <rect width="40" height="40" rx="8" fill="#D4714E"/>
+          <path d="M10 28 L20 12 L30 28" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="20" cy="12" r="2.5" fill="white"/>
+        </svg>
+        Frontend Ollama
+      </div>
+      <button class="btn-new-chat" id="btn-new-chat" title="Nueva conversación">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Nueva conversación
+      </button>
+    </div>
+
+    <div class="sidebar-list" id="conv-list" aria-label="Lista de conversaciones">
+      <p style="font-size:.78rem;color:var(--text-sidebar-muted);padding:12px 8px">Cargando…</p>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="user-avatar">{{ user['username'][0].upper() }}</div>
+        <div>
+          <div class="user-name">{{ user['username'] }}</div>
+          <div class="user-role">{{ user['role'] }}</div>
+        </div>
+      </div>
+      <div class="sidebar-action-links">
+        {% if user['role'] == 'admin' %}
+        <a class="sidebar-link" href="{{ url_for('admin.index') }}" title="Panel de administración">⚙ Admin</a>
+        {% endif %}
+        <a class="sidebar-link" href="{{ url_for('auth.change_password') }}" title="Cambiar contraseña">🔒 Pwd</a>
+        <a class="sidebar-link" href="{{ url_for('auth.logout') }}" title="Cerrar sesión">⎋ Salir</a>
+      </div>
+    </div>
+
+  </aside>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <!-- ── Chat principal ──────────────────────────────────────────────────── -->
+  <main class="chat-main">
+
+    <!-- Topbar -->
+    <div class="chat-topbar">
+      <button class="btn-sidebar-toggle icon-btn" id="btn-sidebar-toggle" aria-label="Abrir sidebar" title="Conversaciones">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <div class="model-select-wrapper">
+        <select class="model-select" id="model-select" aria-label="Seleccionar modelo">
+          <option value="">Cargando modelos…</option>
+        </select>
+      </div>
+
+      <div class="ollama-status" aria-live="polite">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Comprobando…</span>
+      </div>
+
+      <div class="topbar-actions">
+        <!-- Theme toggle -->
+        <div class="theme-toggle" role="group" aria-label="Tema">
+          <button class="theme-btn" data-theme-value="light" title="Tema claro">☀</button>
+          <button class="theme-btn" data-theme-value="dark" title="Tema oscuro">☾</button>
+          <button class="theme-btn" data-theme-value="system" title="Según sistema">⊙</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mensajes -->
+    <div class="messages-area" id="messages-area" role="log" aria-live="polite" aria-label="Mensajes del chat">
+      <div class="messages-inner" id="messages-inner">
+        <div class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <h2>¿En qué puedo ayudarte?</h2>
+          <p>Selecciona un modelo y escribe tu primer mensaje.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-inner">
+        <textarea
+          class="chat-textarea"
+          id="chat-textarea"
+          placeholder="Escribe un mensaje… (Enter para enviar, Shift+Enter para nueva línea)"
+          rows="1"
+          aria-label="Mensaje"
+          aria-multiline="true"
+        ></textarea>
+        <button class="send-btn" id="send-btn" title="Enviar mensaje" aria-label="Enviar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <p class="input-hint">Los modelos pueden cometer errores. Verifica información importante.</p>
+    </div>
+
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}
