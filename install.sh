@@ -71,8 +71,10 @@ if ! id "$SERVICE_USER" &>/dev/null; then
         --comment "Frontend-Ollama service user" \
         "$SERVICE_USER"
     log "Usuario '$SERVICE_USER' creado"
+    usermod -aG "$SERVICE_USER" www-data
 else
     log "Usuario '$SERVICE_USER' ya existe"
+    usermod -aG "$SERVICE_USER" www-data 2>/dev/null || true
 fi
 
 # ── 3. Clonar o actualizar repositorio ────────────────────────────────────────
