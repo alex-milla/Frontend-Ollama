@@ -1,6 +1,10 @@
 /**
  * chat.js — Chat con soporte de proyectos, habilidades, adjuntos y exportación.
- * v4.2: markdown renderizado con marked.js + botón "Continuar" para respuestas cortadas.
+ * v4.4:
+ *  - Respuestas del asistente en texto plano (sin renderizado markdown)
+ *  - Botón ■ Parar para cancelar el streaming en curso
+ *  - Botón "Continuar respuesta" corregido (mantiene conv_id)
+ *  - Watchdog de 45 s ante cuelgues
  */
 (function () {
   "use strict";
@@ -11,7 +15,7 @@
   let currentProject  = null;
   let activeSkillIds  = [];
   let allProjects     = [];
-  let lastAssistantBubble = null; // referencia al último bubble del asistente
+  let abortController = null; // para cancelar el stream
 
   // ── DOM refs ──────────────────────────────────────────────────────────────────
   const messagesArea   = document.getElementById("messages-area");
@@ -30,38 +34,21 @@
   const skillsPanel    = document.getElementById("skills-panel");
   const skillsChips    = document.getElementById("skills-chips");
   const projectBadge   = document.getElementById("project-badge");
+  const stopBtn        = document.getElementById("stop-btn");
 
   // ── API pública para attachments.js ──────────────────────────────────────────
   window.getCurrentConvId    = () => currentConvId;
   window.getCurrentProjectId = () => currentProject ? currentProject.id : null;
   window.setCurrentConvId    = (id) => { currentConvId = id; setActiveConv(id); };
 
-  // ── marked.js config ─────────────────────────────────────────────────────────
-  function setupMarked() {
-    if (typeof marked === "undefined") return;
-    marked.setOptions({
-      breaks: true,       // saltos de línea simples → <br>
-      gfm: true,          // GitHub Flavored Markdown
-      sanitize: false,    // confiamos en el contenido del modelo local
-    });
-  }
-
-  function renderMarkdown(text) {
-    if (typeof marked !== "undefined") {
-      try { return marked.parse(text); } catch (e) { /* fallback */ }
-    }
-    // Fallback minimalista si marked no carga
-    return "<p>" + esc(text).replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>") + "</p>";
-  }
-
   // ── Init ──────────────────────────────────────────────────────────────────────
   async function init() {
-    setupMarked();
     await loadModels();
     await checkOllamaStatus();
     await loadProjects();
     setupTextarea();
     setupSidebar();
+    setupStopBtn();
 
     const params = new URLSearchParams(window.location.search);
     const pid = params.get("project_id");
@@ -93,12 +80,12 @@
     try {
       const res  = await fetch("/api/ollama/status");
       const data = await res.json();
-      statusDot.className  = "status-dot " + (data.ok ? "ok" : "err");
+      statusDot.className    = "status-dot " + (data.ok ? "ok" : "err");
       statusText.textContent = data.ok
         ? `Ollama · ${data.models_count} modelo${data.models_count !== 1 ? "s" : ""}`
         : "Ollama desconectado";
     } catch {
-      statusDot.className  = "status-dot err";
+      statusDot.className    = "status-dot err";
       statusText.textContent = "Sin conexión";
     }
   }
@@ -120,10 +107,9 @@
   async function onProjectChange() {
     const pid = projectSelect.value ? Number(projectSelect.value) : null;
     activeSkillIds = [];
-
     if (!pid) {
       currentProject = null;
-      skillsPanel.style.display = "none";
+      skillsPanel.style.display  = "none";
       projectBadge.style.display = "none";
       updateSaveBtn();
       await loadConversations();
@@ -133,9 +119,8 @@
       const res  = await fetch(`/projects/api/projects/${pid}`);
       const data = await res.json();
       currentProject = data.project;
-      projectBadge.textContent  = "📁 " + data.project.name;
+      projectBadge.textContent   = "📁 " + data.project.name;
       projectBadge.style.display = "";
-
       skillsChips.innerHTML = "";
       if (!data.skills?.length) {
         skillsPanel.style.display = "none";
@@ -143,7 +128,7 @@
         skillsPanel.style.display = "";
         data.skills.forEach(s => {
           const chip = document.createElement("div");
-          chip.dataset.id  = s.id;
+          chip.dataset.id    = s.id;
           chip.style.cssText = "padding:3px 8px;border-radius:12px;font-size:.72rem;font-weight:600;cursor:pointer;border:1px solid var(--accent);background:var(--accent-light);color:var(--accent);transition:all var(--transition);";
           chip.textContent = s.name;
           chip.title = s.description || s.name;
@@ -166,10 +151,10 @@
     const idx = activeSkillIds.indexOf(skillId);
     if (idx === -1) {
       activeSkillIds.push(skillId);
-      chip.style.cssText = chip.style.cssText.replace(/opacity:[^;]+;?/, "");
       chip.style.background  = "var(--accent-light)";
       chip.style.borderColor = "var(--accent)";
       chip.style.color       = "var(--accent)";
+      chip.style.opacity     = "1";
     } else {
       activeSkillIds.splice(idx, 1);
       chip.style.background  = "transparent";
@@ -259,7 +244,6 @@
     closeSidebar();
     currentConvId = id;
     setActiveConv(id);
-    lastAssistantBubble = null;
 
     messagesInner.innerHTML = `
       <div class="message assistant">
@@ -288,12 +272,8 @@
   function renderMessages(msgs) {
     if (!msgs.length) { showEmptyState(); return; }
     messagesInner.innerHTML = "";
-    msgs.forEach(m => {
-      const bubble = appendMessage(m.role, m.content);
-      if (m.role === "assistant") lastAssistantBubble = bubble;
-    });
-    // Mostrar botón continuar tras el último mensaje del asistente
-    appendContinueBtn();
+    msgs.forEach(m => appendMessage(m.role, m.content));
+    renderContinueBtn();
     scrollToBottom();
   }
 
@@ -314,52 +294,63 @@
   function newChat() {
     if (isStreaming) return;
     currentConvId = null;
-    lastAssistantBubble = null;
     document.querySelectorAll(".conv-item").forEach(el => el.classList.remove("active"));
     showEmptyState();
     closeSidebar();
     chatTextarea.focus();
   }
 
+  // ── Botón Parar ───────────────────────────────────────────────────────────────
+
+  function setupStopBtn() {
+    if (!stopBtn) return;
+    stopBtn.style.display = "none";
+    stopBtn.addEventListener("click", () => {
+      if (abortController) {
+        abortController.abort();
+        abortController = null;
+      }
+    });
+  }
+
+  function setStreaming(val) {
+    isStreaming            = val;
+    sendBtn.style.display  = val ? "none" : "";
+    if (stopBtn) stopBtn.style.display = val ? "flex" : "none";
+    chatTextarea.disabled  = val;
+  }
+
   // ── Botón Continuar ───────────────────────────────────────────────────────────
 
-  function appendContinueBtn() {
-    // Eliminar botón anterior si existe
+  function renderContinueBtn() {
     document.getElementById("continue-btn-wrap")?.remove();
-
     if (!currentConvId) return;
+    if (!messagesInner.querySelector(".message.assistant")) return;
 
     const wrap = document.createElement("div");
     wrap.id = "continue-btn-wrap";
-    wrap.style.cssText = "display:flex;justify-content:center;padding:8px 0 4px;";
+    wrap.style.cssText = "display:flex;justify-content:center;padding:10px 0 4px;";
     wrap.innerHTML = `
       <button id="continue-btn" style="
-        padding:7px 18px;background:transparent;border:1px solid var(--border);
-        border-radius:20px;color:var(--text-secondary);font-family:var(--font-sans);
-        font-size:.78rem;cursor:pointer;transition:all var(--transition);display:flex;
-        align-items:center;gap:6px;">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <polyline points="9 18 15 12 9 6"/>
-        </svg>
-        Continuar respuesta
+        padding:6px 16px;background:transparent;
+        border:1px solid var(--border);border-radius:20px;
+        color:var(--text-secondary);font-family:var(--font-sans);
+        font-size:.78rem;cursor:pointer;transition:all 150ms ease;
+        display:flex;align-items:center;gap:5px;">
+        ▶ Continuar respuesta
       </button>`;
     messagesInner.appendChild(wrap);
 
-    wrap.querySelector("#continue-btn").addEventListener("mouseenter", e => {
-      e.target.style.borderColor = "var(--accent)";
-      e.target.style.color = "var(--accent)";
-    });
-    wrap.querySelector("#continue-btn").addEventListener("mouseleave", e => {
-      e.target.style.borderColor = "var(--border)";
-      e.target.style.color = "var(--text-secondary)";
-    });
-    wrap.querySelector("#continue-btn").addEventListener("click", continueResponse);
+    const btn = document.getElementById("continue-btn");
+    btn.addEventListener("mouseover", () => { btn.style.borderColor = "var(--accent)"; btn.style.color = "var(--accent)"; });
+    btn.addEventListener("mouseout",  () => { btn.style.borderColor = "var(--border)";  btn.style.color = "var(--text-secondary)"; });
+    btn.addEventListener("click", continueResponse);
   }
 
   async function continueResponse() {
     if (isStreaming || !currentConvId) return;
     document.getElementById("continue-btn-wrap")?.remove();
-    await streamResponse("Continúa exactamente donde te quedaste, sin repetir lo ya escrito.", true);
+    await doStream("Continúa exactamente donde te quedaste, sin repetir lo ya escrito.");
   }
 
   // ── Enviar mensaje ────────────────────────────────────────────────────────────
@@ -369,7 +360,6 @@
     const model = modelSelect.value;
     if (!content || !model || isStreaming) return;
 
-    // Inyectar contexto del adjunto si existe
     const attachCtx = window.getAttachmentContext ? window.getAttachmentContext() : null;
     if (attachCtx) content = content + attachCtx;
 
@@ -377,98 +367,148 @@
     chatTextarea.value = "";
     resizeTextarea();
 
-    // Limpiar botón continuar
     document.getElementById("continue-btn-wrap")?.remove();
-
-    // Limpiar adjunto de un solo uso
     if (window.clearAttachmentAfterSend) window.clearAttachmentAfterSend();
 
     messagesInner.querySelector(".empty-state")?.remove();
     appendMessage("user", displayContent);
     scrollToBottom();
 
-    await streamResponse(content, false, model);
+    await doStream(content);
   }
 
-  async function streamResponse(content, isContinue = false, model = null) {
-    model = model || modelSelect.value;
+  // ── Streaming central ─────────────────────────────────────────────────────────
+
+  async function doStream(content) {
+    const model = modelSelect.value;
     if (!model) return;
 
     setStreaming(true);
+    abortController = new AbortController();
+
     const thinkingEl = appendThinking();
     scrollToBottom();
 
     const body = { message: content, model, skill_ids: activeSkillIds };
-    if (currentConvId) body.conversation_id = currentConvId;
+    if (currentConvId)  body.conversation_id = currentConvId;
     if (currentProject) body.project_id = currentProject.id;
 
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let response;
+    try {
+      response = await fetch("/api/chat", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+        signal:  abortController.signal,
+      });
+    } catch (e) {
+      thinkingEl.remove();
+      if (e.name !== "AbortError") appendError("Error de red al conectar con el servidor.");
+      setStreaming(false);
+      renderContinueBtn();
+      return;
+    }
 
     if (!response.ok) {
       thinkingEl.remove();
       appendError("Error al conectar con el servidor.");
       setStreaming(false);
+      renderContinueBtn();
       return;
     }
 
     const reader  = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    let buffer          = "";
     let assistantBubble = null;
-    let fullText = "";
+    let fullText        = "";
+    let lastTokenTime   = Date.now();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
+    // Watchdog: si no llegan tokens en 45 s, cortar limpiamente
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastTokenTime > 45000 && isStreaming) {
+        clearInterval(watchdog);
+        abortController?.abort();
+        setStreaming(false);
+        if (assistantBubble) assistantBubble.textContent = fullText;
+        renderContinueBtn();
+      }
+    }, 3000);
 
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (raw === "[DONE]") {
-          setStreaming(false);
-          if (assistantBubble) {
-            assistantBubble.innerHTML = renderMarkdown(fullText);
-            lastAssistantBubble = assistantBubble;
-          }
-          appendContinueBtn();
-          await loadConversations();
-          break;
-        }
-        try {
-          const obj = JSON.parse(raw);
-          if (obj.conv_id && !currentConvId) {
-            currentConvId = obj.conv_id;
-            setActiveConv(currentConvId);
-          }
-          if (obj.token) {
-            thinkingEl.remove();
-            if (!assistantBubble) assistantBubble = appendMessageStreaming();
-            fullText += obj.token;
-            // Renderizar markdown solo cada ~20 tokens para no saturar el DOM
-            if (fullText.length % 80 === 0) {
-              assistantBubble.innerHTML = renderMarkdown(fullText);
-            } else {
-              // Mostrar texto plano mientras llega (más rápido)
-              assistantBubble.textContent = fullText;
-            }
-            scrollToBottom();
-          }
-          if (obj.error) {
-            thinkingEl.remove();
-            appendError(obj.error);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        lastTokenTime = Date.now();
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+
+          if (raw === "[DONE]") {
+            clearInterval(watchdog);
             setStreaming(false);
+            // Renderizado final: texto plano con saltos de línea respetados
+            if (assistantBubble) setPlainText(assistantBubble, fullText);
+            renderContinueBtn();
+            await loadConversations();
+            return;
           }
-        } catch { }
+
+          try {
+            const obj = JSON.parse(raw);
+            if (obj.conv_id && !currentConvId) {
+              currentConvId = obj.conv_id;
+              setActiveConv(currentConvId);
+            }
+            if (obj.token) {
+              thinkingEl.remove();
+              if (!assistantBubble) assistantBubble = appendMessageStreaming();
+              fullText += obj.token;
+              // Durante el stream: texto plano directo, rápido
+              assistantBubble.textContent = fullText;
+              scrollToBottom();
+            }
+            if (obj.error) {
+              clearInterval(watchdog);
+              thinkingEl.remove();
+              appendError(obj.error);
+              setStreaming(false);
+              renderContinueBtn();
+              return;
+            }
+          } catch { }
+        }
+      }
+    } catch (e) {
+      // Stream abortado por el usuario o por error de red
+      if (e.name !== "AbortError") {
+        if (!assistantBubble) { thinkingEl.remove(); appendError("La conexión se interrumpió."); }
+      } else {
+        // Abortado manualmente: conservar lo recibido
+        thinkingEl.remove();
       }
     }
+
+    clearInterval(watchdog);
     setStreaming(false);
+    if (assistantBubble && fullText) setPlainText(assistantBubble, fullText);
+    renderContinueBtn();
+    if (fullText) await loadConversations();
+  }
+
+  // Renderiza texto plano respetando saltos de línea (sin markdown)
+  function setPlainText(el, text) {
+    el.innerHTML = "";
+    const lines = text.split("\n");
+    lines.forEach((line, i) => {
+      el.appendChild(document.createTextNode(line));
+      if (i < lines.length - 1) el.appendChild(document.createElement("br"));
+    });
   }
 
   // ── Helpers de UI ─────────────────────────────────────────────────────────────
@@ -476,16 +516,27 @@
   function appendMessage(role, content) {
     const el = document.createElement("div");
     el.className = `message ${role}`;
-    el.innerHTML = `
-      <div class="message-avatar">${role === "user" ? "Tú" : "AI"}</div>
-      <div class="message-body">
-        <div class="message-bubble">${role === "assistant" ? renderMarkdown(content) : esc(content)}</div>
-      </div>`;
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble";
+
+    if (role === "assistant") {
+      // Texto plano con saltos de línea
+      setPlainText(bubble, content);
+    } else {
+      bubble.textContent = content;
+    }
+
+    el.innerHTML = `<div class="message-avatar">${role === "user" ? "Tú" : "AI"}</div>`;
+    const body = document.createElement("div");
+    body.className = "message-body";
+    body.appendChild(bubble);
+    el.appendChild(body);
     messagesInner.appendChild(el);
-    return el.querySelector(".message-bubble");
+    return bubble;
   }
 
   function appendThinking() {
+    document.getElementById("thinking-msg")?.remove();
     const el = document.createElement("div");
     el.className = "message assistant";
     el.id = "thinking-msg";
@@ -493,7 +544,9 @@
       <div class="message-avatar">AI</div>
       <div class="message-body">
         <div class="message-bubble thinking-indicator">
-          <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
         </div>
       </div>`;
     messagesInner.appendChild(el);
@@ -505,13 +558,16 @@
     document.getElementById("thinking-msg")?.remove();
     const el = document.createElement("div");
     el.className = "message assistant";
-    el.innerHTML = `
-      <div class="message-avatar">AI</div>
-      <div class="message-body">
-        <div class="message-bubble" id="streaming-bubble"></div>
-      </div>`;
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble";
+    bubble.id = "streaming-bubble";
+    el.innerHTML = `<div class="message-avatar">AI</div>`;
+    const body = document.createElement("div");
+    body.className = "message-body";
+    body.appendChild(bubble);
+    el.appendChild(body);
     messagesInner.appendChild(el);
-    return document.getElementById("streaming-bubble");
+    return bubble;
   }
 
   function appendError(msg) {
@@ -528,12 +584,6 @@
 
   function scrollToBottom() {
     messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: "smooth" });
-  }
-
-  function setStreaming(val) {
-    isStreaming         = val;
-    sendBtn.disabled    = val;
-    chatTextarea.disabled = val;
   }
 
   function esc(str) {
