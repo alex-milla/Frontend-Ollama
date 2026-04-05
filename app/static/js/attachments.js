@@ -1,29 +1,48 @@
 /**
  * attachments.js — Lógica de adjuntos de entrada y exportación de salida.
  * Diseñado para ser incluido después de chat.js.
+ *
+ * FIXES sesión 4.1:
+ *  - El contexto del adjunto se inyecta correctamente en cada mensaje.
+ *  - El panel de exportar solo aparece al pulsar el botón "Exportar" de la topbar.
+ *  - El upload no pre-crea conversación innecesaria si ya existe una abierta.
  */
 (function () {
   "use strict";
 
-  // ── Estado ──────────────────────────────────────────────────────────────────
+  // ── Estado ────────────────────────────────────────────────────────────────────
 
   let currentAttachment = null;
-  // { id, original_name, chunk_unit, chunk_count, is_long,
+  // { id, conversation_id, original_name, chunk_unit, chunk_count, is_long,
   //   loaded_from, loaded_to, loaded_text }
 
-  // ── DOM refs ─────────────────────────────────────────────────────────────────
+  // ── DOM refs ──────────────────────────────────────────────────────────────────
 
   const fileInput       = document.getElementById("attach-file-input");
   const attachBtn       = document.getElementById("attach-btn");
   const attachPanelWrap = document.getElementById("attach-panel-wrap");
-  const inputInner      = document.querySelector(".input-inner");
   const messagesArea    = document.getElementById("messages-area");
   const exportPanel     = document.getElementById("export-panel");
-  const exportTextarea  = document.getElementById("chat-textarea");
+  const exportToggleBtn = document.getElementById("btn-export-toggle");
 
   if (!fileInput || !attachBtn) return;
 
-  // ── Botón 📎 ─────────────────────────────────────────────────────────────────
+  // Panel de exportar: siempre oculto al inicio
+  if (exportPanel) exportPanel.style.display = "none";
+
+  // ── Botón Exportar en topbar ──────────────────────────────────────────────────
+
+  if (exportToggleBtn) {
+    exportToggleBtn.addEventListener("click", () => {
+      if (!exportPanel) return;
+      const visible = exportPanel.style.display !== "none";
+      exportPanel.style.display = visible ? "none" : "block";
+      exportToggleBtn.classList.toggle("active", !visible);
+      if (!visible) exportPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
+
+  // ── Botón 📎 ──────────────────────────────────────────────────────────────────
 
   attachBtn.addEventListener("click", () => fileInput.click());
 
@@ -34,16 +53,14 @@
     await uploadFile(file);
   });
 
-  // ── Drag & Drop sobre el área de mensajes ────────────────────────────────────
+  // ── Drag & Drop ───────────────────────────────────────────────────────────────
 
   messagesArea.addEventListener("dragover", e => {
     e.preventDefault();
     messagesArea.style.outline = "2px dashed var(--accent)";
     messagesArea.style.outlineOffset = "-4px";
   });
-  messagesArea.addEventListener("dragleave", () => {
-    messagesArea.style.outline = "";
-  });
+  messagesArea.addEventListener("dragleave", () => { messagesArea.style.outline = ""; });
   messagesArea.addEventListener("drop", async e => {
     e.preventDefault();
     messagesArea.style.outline = "";
@@ -51,25 +68,18 @@
     if (file) await uploadFile(file);
   });
 
-  // ── Upload ───────────────────────────────────────────────────────────────────
+  // ── Upload ────────────────────────────────────────────────────────────────────
 
   async function uploadFile(file) {
-    // Limpiar adjunto previo
     clearAttachment();
-
-    // Mostrar panel en estado "cargando"
-    showAttachPanel({
-      original_name: file.name,
-      size_bytes: file.size,
-      loading: true,
-    });
+    showAttachPanel({ original_name: file.name, size_bytes: file.size, loading: true });
 
     const fd = new FormData();
     fd.append("file", file);
 
-    // Usar conv_id si existe (window.getCurrentConvId expuesto por chat.js)
+    // Pasar conv_id solo si ya existe una conversación abierta
     const convId = window.getCurrentConvId ? window.getCurrentConvId() : null;
-    if (convId) fd.append("conversation_id", convId);
+    if (convId) fd.append("conversation_id", String(convId));
 
     try {
       const res  = await fetch("/api/upload", { method: "POST", body: fd });
@@ -79,56 +89,55 @@
         return;
       }
 
-      // Si se creó nueva conversación, notificar a chat.js
+      // Si el backend creó una conversación nueva, registrarla en chat.js
       if (data.conversation_id && window.setCurrentConvId) {
         window.setCurrentConvId(data.conversation_id);
       }
 
       currentAttachment = {
-        id:           data.attachment_id,
-        original_name: data.original_name,
-        chunk_unit:   data.chunk_unit,
-        chunk_count:  data.chunk_count,
-        is_long:      data.is_long,
-        loaded_from:  null,
-        loaded_to:    null,
-        loaded_text:  null,
+        id:              data.attachment_id,
+        conversation_id: data.conversation_id,
+        original_name:   data.original_name,
+        chunk_unit:      data.chunk_unit,
+        chunk_count:     data.chunk_count,
+        is_long:         data.is_long,
+        loaded_from:     null,
+        loaded_to:       null,
+        loaded_text:     null,
       };
 
       attachBtn.classList.add("has-file");
 
       if (!data.is_long) {
-        // Cargar automáticamente todo el contenido
-        await loadRange(1, data.chunk_count, true);
+        // Archivo corto: cargar todo el contenido automáticamente
+        await loadRange(1, data.chunk_count);
       } else {
         showAttachPanel({
           original_name: data.original_name,
-          size_bytes: file.size,
-          chunk_count: data.chunk_count,
-          chunk_unit: data.chunk_unit,
-          is_long: true,
-          loaded_from: null,
-          loaded_to: null,
+          size_bytes:    file.size,
+          chunk_count:   data.chunk_count,
+          chunk_unit:    data.chunk_unit,
+          is_long:       true,
+          loaded_from:   null,
+          loaded_to:     null,
         });
       }
-    } catch (err) {
+    } catch {
       showAttachPanel({ error: "Error de red al subir el archivo", original_name: file.name, size_bytes: file.size });
     }
   }
 
-  // ── Cargar rango ─────────────────────────────────────────────────────────────
+  // ── Cargar rango ──────────────────────────────────────────────────────────────
 
-  async function loadRange(from, to, auto = false) {
+  async function loadRange(from, to) {
     if (!currentAttachment) return;
-    const id = currentAttachment.id;
 
     try {
-      const res  = await fetch(`/api/attachments/${id}/range?from=${from}&to=${to}`);
+      const res  = await fetch(`/api/attachments/${currentAttachment.id}/range?from=${from}&to=${to}`);
       const data = await res.json();
-      if (!res.ok) {
-        console.error("Error cargando rango:", data.error);
-        return;
-      }
+      if (!res.ok) { console.error("Error cargando rango:", data.error); return; }
+
+      // Guardar texto en el estado — getAttachmentContext() lo leerá desde aquí
       currentAttachment.loaded_from = data.from;
       currentAttachment.loaded_to   = data.to;
       currentAttachment.loaded_text = data.text;
@@ -150,16 +159,16 @@
     }
   }
 
-  // ── Panel UI ─────────────────────────────────────────────────────────────────
+  // ── Panel UI ──────────────────────────────────────────────────────────────────
 
   function showAttachPanel(opts) {
     attachPanelWrap.innerHTML = "";
     attachPanelWrap.style.display = "block";
 
-    const panel = document.createElement("div");
+    const panel     = document.createElement("div");
     panel.className = "attach-panel";
 
-    const sizeStr = opts.size_bytes ? formatBytes(opts.size_bytes) : "";
+    const sizeStr   = opts.size_bytes ? formatBytes(opts.size_bytes) : "";
     const unitLabel = unitName(opts.chunk_unit);
 
     // Header
@@ -167,7 +176,7 @@
     header.className = "attach-panel-header";
     header.innerHTML = `
       <span class="attach-icon">📄</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(opts.original_name || "")}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(opts.original_name || "")}">${esc(opts.original_name || "")}</span>
       ${sizeStr ? `<span class="attach-panel-meta">${sizeStr}</span>` : ""}
       <button class="attach-close-btn" id="attach-close-btn" title="Quitar adjunto">✕</button>
     `;
@@ -178,19 +187,22 @@
       st.className = "attach-status warning";
       st.innerHTML = `<span>⏳</span> Procesando archivo…`;
       panel.appendChild(st);
+
     } else if (opts.error) {
       const st = document.createElement("div");
       st.className = "attach-status warning";
       st.innerHTML = `<span>⚠</span> ${esc(opts.error)}`;
       panel.appendChild(st);
+
     } else if (!opts.is_long && opts.loaded_from !== null) {
-      // Archivo corto — ya cargado
+      // Archivo corto cargado — listo para enviar
       const st = document.createElement("div");
       st.className = "attach-status ok";
-      st.innerHTML = `<span>✓</span> Contenido cargado en el contexto (${opts.word_count?.toLocaleString() || "?"} palabras)`;
+      st.innerHTML = `<span>✓</span> Contenido cargado (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirá en tu próximo mensaje`;
       panel.appendChild(st);
+
     } else if (opts.is_long) {
-      // Selector de rango
+      // Selector de rango para archivo largo
       const warn = document.createElement("div");
       warn.className = "attach-status warning";
       warn.innerHTML = `<span>⚠</span> Archivo extenso · ${opts.chunk_count} ${unitLabel}s en total. Selecciona el rango a analizar:`;
@@ -198,8 +210,6 @@
 
       const rangeWrap = document.createElement("div");
       rangeWrap.className = "attach-range";
-
-      // Inputs de rango
       const defaultTo = Math.min(10, opts.chunk_count);
       rangeWrap.innerHTML = `
         <div class="attach-range-row">
@@ -211,16 +221,12 @@
         </div>
       `;
 
-      // Mostrar rango ya cargado
       if (opts.loaded_from !== null) {
         const loaded = document.createElement("div");
         loaded.className = "attach-loaded-info";
-        loaded.innerHTML = `
-          ✓ ${capitalize(unitLabel)}s ${opts.loaded_from}–${opts.loaded_to} cargados (${opts.word_count?.toLocaleString() || "?"} palabras)
-        `;
+        loaded.innerHTML = `✓ ${capitalize(unitLabel)}s ${opts.loaded_from}–${opts.loaded_to} cargados (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirán en tu próximo mensaje`;
         rangeWrap.appendChild(loaded);
 
-        // Botón para continuar con el siguiente rango
         if (opts.loaded_to < opts.total) {
           const nextFrom = opts.loaded_to + 1;
           const nextTo   = Math.min(opts.loaded_to + 10, opts.total);
@@ -237,7 +243,6 @@
 
       panel.appendChild(rangeWrap);
 
-      // Event: cargar rango
       setTimeout(() => {
         const btn = document.getElementById("range-load-btn");
         if (btn) {
@@ -253,7 +258,6 @@
 
     attachPanelWrap.appendChild(panel);
 
-    // Cerrar
     setTimeout(() => {
       const closeBtn = document.getElementById("attach-close-btn");
       if (closeBtn) closeBtn.addEventListener("click", clearAttachment);
@@ -262,7 +266,6 @@
 
   function clearAttachment() {
     if (currentAttachment) {
-      // Borrar del servidor (best-effort)
       fetch(`/api/attachments/${currentAttachment.id}`, { method: "DELETE" }).catch(() => {});
     }
     currentAttachment = null;
@@ -271,8 +274,12 @@
     attachBtn.classList.remove("has-file");
   }
 
-  // ── Exponer texto del adjunto para chat.js ────────────────────────────────────
+  // ── API pública para chat.js ──────────────────────────────────────────────────
 
+  /**
+   * Devuelve el texto del adjunto para concatenar al mensaje del usuario,
+   * o null si no hay adjunto con texto cargado.
+   */
   window.getAttachmentContext = function () {
     if (!currentAttachment || !currentAttachment.loaded_text) return null;
     const unit = unitName(currentAttachment.chunk_unit);
@@ -282,10 +289,14 @@
     return `\n\n---\n[Archivo adjunto: ${currentAttachment.original_name}${rangeDesc}]\n\n${currentAttachment.loaded_text}\n---\n`;
   };
 
+  /**
+   * Llamado por chat.js tras un envío exitoso.
+   * Archivos cortos: limpia el panel (texto ya enviado).
+   * Archivos largos: mantiene el panel para cargar el siguiente rango.
+   */
   window.clearAttachmentAfterSend = function () {
-    if (!currentAttachment || currentAttachment.is_long) return;
-    // Para archivos cortos, limpiar tras el envío
-    currentAttachment.loaded_text = null;
+    if (!currentAttachment) return;
+    if (currentAttachment.is_long) return; // mantener para siguiente rango
     attachPanelWrap.innerHTML = "";
     attachPanelWrap.style.display = "none";
     attachBtn.classList.remove("has-file");
@@ -304,19 +315,6 @@
 
     if (!formatSel) return;
 
-    // Mostrar panel solo cuando hay mensajes del asistente
-    const observer = new MutationObserver(checkExportVisibility);
-    const msgInner = document.getElementById("messages-inner");
-    if (msgInner) observer.observe(msgInner, { childList: true, subtree: true });
-    checkExportVisibility();
-
-    function checkExportVisibility() {
-      if (!exportPanel) return;
-      const hasAssistant = msgInner && msgInner.querySelector(".message.assistant");
-      exportPanel.style.display = hasAssistant ? "block" : "none";
-    }
-
-    // Plantillas disponibles según formato
     const TEMPLATE_OPTIONS = {
       txt:  ["libre"],
       md:   ["libre"],
@@ -324,35 +322,24 @@
       docx: ["libre", "informe", "carta", "legal", "email", "resumen"],
       pdf:  ["libre", "informe", "carta", "legal", "email", "resumen"],
     };
-
     const TEMPLATE_LABELS = {
-      libre:   "Texto libre",
-      informe: "Informe",
-      carta:   "Carta",
-      legal:   "Escrito legal",
-      email:   "Email",
-      resumen: "Resumen ejecutivo",
+      libre: "Texto libre", informe: "Informe", carta: "Carta",
+      legal: "Escrito legal", email: "Email", resumen: "Resumen ejecutivo",
     };
 
     formatSel.addEventListener("change", () => {
-      const fmt = formatSel.value;
-      const opts = TEMPLATE_OPTIONS[fmt] || ["libre"];
-      templateSel.innerHTML = opts.map(t =>
-        `<option value="${t}">${TEMPLATE_LABELS[t] || t}</option>`
-      ).join("");
+      const opts = TEMPLATE_OPTIONS[formatSel.value] || ["libre"];
+      templateSel.innerHTML = opts.map(t => `<option value="${t}">${TEMPLATE_LABELS[t] || t}</option>`).join("");
     });
 
     async function doExport(saveToProject) {
       const text = collectConversationText();
-      if (!text) {
-        showResult("No hay contenido para exportar.", false);
-        return;
-      }
+      if (!text) { showResult("No hay respuestas del asistente para exportar.", false); return; }
+
       const fmt      = formatSel.value;
       const template = templateSel.value;
       const filename = (filenameInp.value.trim() || "documento").replace(/[^\w\-\.]/g, "_");
-
-      const body = { text, format: fmt, template, filename };
+      const body     = { text, format: fmt, template, filename };
 
       if (saveToProject) {
         const pid = window.getCurrentProjectId ? window.getCurrentProjectId() : null;
@@ -371,33 +358,24 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-
         if (!res.ok) {
           const err = await res.json();
           showResult(err.error || "Error generando archivo.", false);
           return;
         }
-
         if (saveToProject) {
-          const data = await res.json();
           showResult(`✓ Guardado en el proyecto. <a href="/projects/" style="color:var(--accent)">Ver en Proyectos</a>`, true);
         } else {
-          // Descarga directa
-          const blob  = await res.blob();
-          const url   = URL.createObjectURL(blob);
-          const a     = document.createElement("a");
-          a.href      = url;
-          a.download  = filename + "." + fmt;
+          const blob = await res.blob();
+          const url  = URL.createObjectURL(blob);
+          const a    = Object.assign(document.createElement("a"), { href: url, download: filename + "." + fmt });
           document.body.appendChild(a);
           a.click();
           setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
           showResult("✓ Descarga iniciada.", true);
         }
-      } catch (err) {
-        showResult("Error de red.", false);
-      } finally {
-        [dlBtn, saveBtn].forEach(b => b && (b.disabled = false));
-      }
+      } catch { showResult("Error de red.", false); }
+      finally { [dlBtn, saveBtn].forEach(b => b && (b.disabled = false)); }
     }
 
     function showResult(msg, ok) {
@@ -407,16 +385,14 @@
       resultEl.style.display = "block";
     }
 
-    if (dlBtn)   dlBtn.addEventListener("click",   () => doExport(false));
-    if (saveBtn) saveBtn.addEventListener("click",  () => doExport(true));
+    if (dlBtn)   dlBtn.addEventListener("click", () => doExport(false));
+    if (saveBtn) saveBtn.addEventListener("click", () => doExport(true));
   }
 
   function collectConversationText() {
     const msgInner = document.getElementById("messages-inner");
     if (!msgInner) return "";
-    const bubbles = msgInner.querySelectorAll(".message.assistant .message-bubble");
-    if (!bubbles.length) return "";
-    return [...bubbles]
+    return [...msgInner.querySelectorAll(".message.assistant .message-bubble")]
       .map(b => b.innerText || b.textContent || "")
       .filter(Boolean)
       .join("\n\n");
@@ -424,35 +400,20 @@
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
-  function formatBytes(bytes) {
-    if (bytes < 1024)      return bytes + " B";
-    if (bytes < 1048576)   return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
+  function formatBytes(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
   }
-
-  function unitName(unit) {
-    return { page: "página", block: "bloque", row: "fila" }[unit] || unit;
-  }
-
-  function capitalize(s) {
-    return s ? s[0].toUpperCase() + s.slice(1) : s;
-  }
-
+  function unitName(u) { return { page: "página", block: "bloque", row: "fila" }[u] || (u || "bloque"); }
+  function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
   function esc(str) {
-    return String(str)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
-  // ── Init ─────────────────────────────────────────────────────────────────────
+  // ── Init ──────────────────────────────────────────────────────────────────────
 
-  document.addEventListener("DOMContentLoaded", () => {
-    initExportPanel();
-  });
-
-  // Si el DOM ya está listo (script cargado en defer)
-  if (document.readyState !== "loading") {
-    initExportPanel();
-  }
+  document.addEventListener("DOMContentLoaded", initExportPanel);
+  if (document.readyState !== "loading") initExportPanel();
 
 })();

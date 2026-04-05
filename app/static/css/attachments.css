@@ -253,6 +253,13 @@
 .export-btn.secondary:hover { background: var(--accent-light); }
 .export-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+/* Estado activo del botón Exportar en topbar */
+.icon-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .export-result {
   margin-top: 8px;
   font-size: .78rem;
