@@ -30,12 +30,10 @@
   async function init() {
     await loadModels();
     await checkOllamaStatus();
-    await loadProjects();  // pobla el <select> y adjunta listener
+    await loadProjects();
     setupTextarea();
     setupSidebar();
 
-    // Preseleccionar proyecto desde URL (?project_id=X)
-    // Comparar como string porque option.value siempre es string
     const params = new URLSearchParams(window.location.search);
     const pid = params.get("project_id");
     if (pid) {
@@ -49,7 +47,6 @@
     await loadConversations();
   }
 
-  // ── Modelos ────────────────────────────────────────────────────────────────
   async function loadModels() {
     try {
       const res = await fetch("/api/models");
@@ -67,7 +64,6 @@
     }
   }
 
-  // ── Ollama status ──────────────────────────────────────────────────────────
   async function checkOllamaStatus() {
     try {
       const res = await fetch("/api/ollama/status");
@@ -82,7 +78,6 @@
     }
   }
 
-  // ── Proyectos ──────────────────────────────────────────────────────────────
   async function loadProjects() {
     try {
       const res = await fetch("/projects/api/projects");
@@ -94,7 +89,7 @@
         opt.textContent = p.name;
         projectSelect.appendChild(opt);
       });
-    } catch { /* silencioso */ }
+    } catch { }
     projectSelect.addEventListener("change", onProjectChange);
   }
 
@@ -118,7 +113,6 @@
       projectBadge.textContent = "📁 " + data.project.name;
       projectBadge.style.display = "";
 
-      // Mostrar chips de habilidades ASIGNADAS al proyecto
       skillsChips.innerHTML = "";
       if (!data.skills || data.skills.length === 0) {
         skillsPanel.style.display = "none";
@@ -135,9 +129,8 @@
           skillsChips.appendChild(chip);
         });
       }
-
       await loadConversations();
-    } catch { /* silencioso */ }
+    } catch { }
   }
 
   function toggleSkillChip(chip, skillId) {
@@ -157,7 +150,6 @@
     }
   }
 
-  // ── Conversaciones ─────────────────────────────────────────────────────────
   async function loadConversations() {
     try {
       const pid = currentProject ? currentProject.id : "";
@@ -165,7 +157,7 @@
       const res = await fetch(url);
       const convs = await res.json();
       renderConvList(convs);
-    } catch { /* silencioso */ }
+    } catch { }
   }
 
   function renderConvList(convs) {
@@ -204,7 +196,6 @@
     return el;
   }
 
-  // ── Modal mover conversación ───────────────────────────────────────────────
   function openMoveModal(convId, convTitle) {
     const existing = document.getElementById("move-modal-overlay");
     if (existing) existing.remove();
@@ -314,7 +305,6 @@
     chatTextarea.focus();
   }
 
-  // ── Envío ──────────────────────────────────────────────────────────────────
   async function sendMessage() {
     const content = chatTextarea.value.trim();
     const model   = modelSelect.value;
@@ -387,13 +377,12 @@
             appendError(obj.error);
             setStreaming(false);
           }
-        } catch { /* JSON incompleto */ }
+        } catch { }
       }
     }
     setStreaming(false);
   }
 
-  // ── DOM helpers ────────────────────────────────────────────────────────────
   function appendMessage(role, content) {
     const el = document.createElement("div");
     el.className = `message ${role}`;
@@ -458,7 +447,6 @@
     chatTextarea.disabled = val;
   }
 
-  // ── Markdown ───────────────────────────────────────────────────────────────
   function renderMarkdown(text) {
     let html = esc(text);
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
@@ -488,7 +476,6 @@
     return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
-  // ── Textarea ───────────────────────────────────────────────────────────────
   function setupTextarea() {
     chatTextarea.addEventListener("keydown", e => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -502,7 +489,6 @@
     chatTextarea.style.height = Math.min(chatTextarea.scrollHeight, 200) + "px";
   }
 
-  // ── Sidebar ────────────────────────────────────────────────────────────────
   function setupSidebar() {
     if (sidebarToggle) sidebarToggle.addEventListener("click", () => sidebar.classList.toggle("open"));
     if (sidebarOverlay) sidebarOverlay.addEventListener("click", closeSidebar);
@@ -511,7 +497,6 @@
 
   function closeSidebar() { sidebar.classList.remove("open"); }
 
-  // ── Borrado ────────────────────────────────────────────────────────────────
   function confirmDelete(id, title) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";

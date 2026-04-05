@@ -4,7 +4,6 @@
 (function () {
   "use strict";
 
-  // ── Init ─────────────────────────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     loadUsers();
     setupCreateUser();
@@ -12,21 +11,17 @@
     setupCheckUpdate();
   });
 
-  // ── Usuarios ──────────────────────────────────────────────────────────────────
   async function loadUsers() {
     const tbody = document.getElementById("users-tbody");
     if (!tbody) return;
-
     try {
       const res   = await fetch("/admin/api/users");
       const users = await res.json();
       tbody.innerHTML = "";
-
       if (users.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary)">Sin usuarios</td></tr>';
         return;
       }
-
       users.forEach((u) => {
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -40,14 +35,12 @@
               <button class="btn-sm danger" data-action="delete" data-id="${u.id}" data-name="${esc(u.username)}">Eliminar</button>
             </div>
           </td>`;
-
         tr.querySelector("[data-action='reset']").addEventListener("click", (e) => {
           resetPassword(Number(e.target.dataset.id), e.target.dataset.name);
         });
         tr.querySelector("[data-action='delete']").addEventListener("click", (e) => {
           confirmDeleteUser(Number(e.target.dataset.id), e.target.dataset.name);
         });
-
         tbody.appendChild(tr);
       });
     } catch {
@@ -62,13 +55,11 @@
       e.preventDefault();
       const errEl = document.getElementById("create-user-error");
       if (errEl) errEl.textContent = "";
-
       const data = {
         username: form.username.value.trim(),
         password: form.password.value,
         role:     form.role.value,
       };
-
       try {
         const res  = await fetch("/admin/api/users", {
           method: "POST",
@@ -129,14 +120,12 @@
     });
   }
 
-  // ── Configuración Ollama ──────────────────────────────────────────────────────
   function setupOllamaConfig() {
-    const testBtn = document.getElementById("test-ollama-btn");
-    const saveBtn = document.getElementById("save-ollama-btn");
+    const testBtn   = document.getElementById("test-ollama-btn");
+    const saveBtn   = document.getElementById("save-ollama-btn");
     const hostInput = document.getElementById("ollama-host-input");
-    const statusEl = document.getElementById("ollama-test-status");
+    const statusEl  = document.getElementById("ollama-test-status");
     const modelListEl = document.getElementById("ollama-model-list");
-
     if (!testBtn || !hostInput) return;
 
     testBtn.addEventListener("click", async () => {
@@ -144,14 +133,12 @@
       statusEl.className = "ollama-status-badge";
       modelListEl.innerHTML = "";
       try {
-        // Test directo al endpoint
         const res  = await fetch("/api/ollama/status");
         const data = await res.json();
         statusEl.className = "ollama-status-badge " + (data.ok ? "ok" : "err");
         statusEl.textContent = data.ok
           ? `✓ Conectado · ${data.models_count} modelo(s)`
           : "✗ Sin conexión";
-
         if (data.ok) {
           const modRes  = await fetch("/api/models");
           const modData = await modRes.json();
@@ -181,12 +168,10 @@
     }
   }
 
-  // ── Check update ──────────────────────────────────────────────────────────────
   function setupCheckUpdate() {
     const btn = document.getElementById("check-update-btn");
     const res = document.getElementById("update-result");
     if (!btn || !res) return;
-
     btn.addEventListener("click", async () => {
       res.textContent = "Consultando GitHub…";
       try {
@@ -200,7 +185,6 @@
     });
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
   function esc(str) {
     return String(str)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;")

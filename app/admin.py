@@ -17,15 +17,11 @@ _MAX_USERNAME_LEN = 64
 _MIN_PASSWORD_LEN = 8
 
 
-# ── Panel HTML ────────────────────────────────────────────────────────────────
-
 @bp.route("/")
 @admin_required
 def index():
     return render_template("admin.html", user=g.user)
 
-
-# ── API: Usuarios ─────────────────────────────────────────────────────────────
 
 @bp.route("/api/users", methods=["GET"])
 @admin_required
@@ -46,8 +42,6 @@ def api_create_user():
 
     if len(username) < _MIN_USERNAME_LEN or len(username) > _MAX_USERNAME_LEN:
         return jsonify({"error": f"El nombre de usuario debe tener entre {_MIN_USERNAME_LEN} y {_MAX_USERNAME_LEN} caracteres."}), 400
-    if not username.isalnum() and not all(c in "_-." for c in username if not c.isalnum()):
-        pass  # permitimos alfanumérico + _ - .
     if len(password) < _MIN_PASSWORD_LEN:
         return jsonify({"error": f"La contraseña debe tener al menos {_MIN_PASSWORD_LEN} caracteres."}), 400
     if role not in ("admin", "user"):
@@ -90,19 +84,15 @@ def api_reset_password(user_id):
         db.close()
         return jsonify({"error": "Usuario no encontrado."}), 404
 
-    # Genera password temporal segura de 12 caracteres
-    temp_pw = secrets.token_urlsafe(9)  # ~12 chars URL-safe
+    temp_pw = secrets.token_urlsafe(9)
     models.update_password(db, user_id, generate_password_hash(temp_pw), must_change=True)
     db.close()
     return jsonify({"ok": True, "temp_password": temp_pw})
 
 
-# ── API: Check / Trigger update ───────────────────────────────────────────────
-
 @bp.route("/api/check-update", methods=["GET"])
 @admin_required
 def api_check_update():
-    """Consulta el último release en GitHub sin descargar nada."""
     import json, urllib.request, urllib.error
     try:
         url = "https://api.github.com/repos/alex-milla/Frontend-Ollama/releases/latest"

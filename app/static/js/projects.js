@@ -6,7 +6,6 @@
 
   let allSkills = [];
 
-  // ── Init ──────────────────────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     setupTabs();
     loadProjects();
@@ -17,7 +16,6 @@
     setupSkillModal();
   });
 
-  // ── Tabs ──────────────────────────────────────────────────────────────────
   function setupTabs() {
     document.querySelectorAll(".tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -30,7 +28,6 @@
     });
   }
 
-  // ── Proyectos ─────────────────────────────────────────────────────────────
   async function loadProjects() {
     const list = document.getElementById("projects-list");
     try {
@@ -94,7 +91,6 @@
     });
   }
 
-  // ── Modal Proyecto ────────────────────────────────────────────────────────
   function setupProjectModal() {
     document.getElementById("modal-project-cancel").addEventListener("click", () => closeModal("modal-project"));
     document.getElementById("modal-project-save").addEventListener("click", saveProject);
@@ -140,7 +136,6 @@
     chip.style.background = active ? "var(--accent-light)" : "transparent";
     chip.style.color = active ? "var(--accent)" : "var(--text-secondary)";
     chip.title = active ? "Clic para desasignar" : "Clic para asignar";
-    // Actualizar icono prefijo
     const name = chip.innerHTML.replace(/^[✓+] /, "");
     chip.innerHTML = (active ? "✓ " : "+ ") + name;
   }
@@ -175,7 +170,6 @@
     showToast("Proyecto eliminado.");
   }
 
-  // ── Habilidades ───────────────────────────────────────────────────────────
   async function loadSkills() {
     const list = document.getElementById("skills-list");
     try {
@@ -232,7 +226,6 @@
     });
   }
 
-  // ── Modal Habilidad ───────────────────────────────────────────────────────
   function setupSkillModal() {
     document.getElementById("modal-skill-cancel").addEventListener("click", () => closeModal("modal-skill"));
     document.getElementById("modal-skill-save").addEventListener("click", saveSkill);
@@ -271,7 +264,6 @@
     showToast("Habilidad eliminada.");
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   function closeModal(id) { document.getElementById(id).style.display = "none"; }
 
   function esc(str) {

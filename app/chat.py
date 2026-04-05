@@ -22,15 +22,11 @@ def _ollama_host():
     return host
 
 
-# ── Vistas HTML ───────────────────────────────────────────────────────────────
-
 @bp.route("/")
 @login_required
 def index():
     return render_template("chat.html", user=g.user)
 
-
-# ── API: Modelos ───────────────────────────────────────────────────────────────
 
 @bp.route("/api/models")
 @login_required
@@ -50,8 +46,6 @@ def api_ollama_status():
     return jsonify(result)
 
 
-# ── API: Conversaciones ────────────────────────────────────────────────────────
-
 @bp.route("/api/conversations", methods=["GET"])
 @login_required
 def api_list_conversations():
@@ -59,12 +53,14 @@ def api_list_conversations():
     db = get_db(current_app.config["DB_PATH"])
     if project_id:
         convs = db.execute(
-            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations WHERE user_id=? AND project_id=? ORDER BY updated_at DESC",
+            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations"
+            " WHERE user_id=? AND project_id=? ORDER BY updated_at DESC",
             (g.user["id"], project_id)
         ).fetchall()
     else:
         convs = db.execute(
-            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations WHERE user_id=? AND project_id IS NULL ORDER BY updated_at DESC",
+            "SELECT id,title,model,project_id,created_at,updated_at FROM conversations"
+            " WHERE user_id=? AND project_id IS NULL ORDER BY updated_at DESC",
             (g.user["id"],)
         ).fetchall()
     db.close()
@@ -112,14 +108,16 @@ def api_delete_conversation(conv_id):
 @login_required
 def api_move_conversation(conv_id):
     data = request.get_json(silent=True) or {}
-    project_id = data.get("project_id")  # None = sin proyecto
+    project_id = data.get("project_id")
     db = get_db(current_app.config["DB_PATH"])
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv is None:
         db.close()
         return jsonify({"error": "No encontrado"}), 404
     db.execute(
-        "UPDATE conversations SET project_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND user_id=?",
+        "UPDATE conversations SET project_id=?,"
+        " updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+        " WHERE id=? AND user_id=?",
         (project_id, conv_id, g.user["id"])
     )
     db.commit()
@@ -161,17 +159,15 @@ def api_export_conversation(conv_id):
     )
 
 
-# ── API: Chat con streaming SSE ───────────────────────────────────────────────
-
 @bp.route("/api/chat", methods=["POST"])
 @login_required
 def api_chat():
     data = request.get_json(silent=True) or {}
-    conv_id     = data.get("conversation_id")
-    model       = str(data.get("model", "")).strip()[:128]
-    content     = str(data.get("message", "")).strip()
-    project_id  = data.get("project_id")
-    skill_ids   = data.get("skill_ids", [])
+    conv_id    = data.get("conversation_id")
+    model      = str(data.get("model", "")).strip()[:128]
+    content    = str(data.get("message", "")).strip()
+    project_id = data.get("project_id")
+    skill_ids  = data.get("skill_ids", [])
 
     if not content or not model:
         return jsonify({"error": "Faltan campos requeridos"}), 400
@@ -212,7 +208,6 @@ def api_chat():
         ollama_msgs = [{"role": "system", "content": system_prompt}] + ollama_msgs
 
     db.close()
-
     host = _ollama_host()
 
     def generate():
@@ -241,8 +236,6 @@ def api_chat():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
-# ── API: Settings (admin) ─────────────────────────────────────────────────────
 
 @bp.route("/api/settings/ollama", methods=["PUT"])
 @admin_required

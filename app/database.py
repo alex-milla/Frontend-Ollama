@@ -93,13 +93,14 @@ CREATE INDEX IF NOT EXISTS idx_skills_user
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """
-    Migraciones incrementales — se ejecutan ANTES del executescript
-    para que el schema nuevo no choque con tablas existentes.
-    Solo añaden, nunca destruyen datos.
+    Migraciones incrementales para instalaciones existentes.
+    Solo se ejecutan si las tablas ya existen (instalación previa).
+    En instalaciones limpias, el schema completo se aplica via executescript.
     """
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
-    if "projects" not in tables:
+    # Crear tabla projects si falta (instalación pre-proyectos)
+    if "conversations" in tables and "projects" not in tables:
         log.info("Migración: creando tabla projects")
         conn.execute("""
             CREATE TABLE projects (
@@ -112,14 +113,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         """)
 
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-    if "project_id" not in cols:
-        log.info("Migración: añadiendo project_id a conversations")
-        conn.execute(
-            "ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL"
-        )
+    # Añadir project_id a conversations si la tabla ya existe pero le falta la columna
+    if "conversations" in tables:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
+        if "project_id" not in cols:
+            log.info("Migración: añadiendo project_id a conversations")
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL"
+            )
 
-    if "skills" not in tables:
+    # Crear tabla skills si falta
+    if "conversations" in tables and "skills" not in tables:
         log.info("Migración: creando tabla skills")
         conn.execute("""
             CREATE TABLE skills (
@@ -133,7 +137,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         """)
 
-    if "project_skills" not in tables:
+    # Crear tabla project_skills si falta
+    if "conversations" in tables and "project_skills" not in tables:
         log.info("Migración: creando tabla project_skills")
         conn.execute("""
             CREATE TABLE project_skills (

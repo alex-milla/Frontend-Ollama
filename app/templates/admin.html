@@ -6,12 +6,8 @@
   <div class="admin-page">
 
     <div class="admin-header">
-      <a class="admin-back" href="{{ url_for('chat.index') }}">
-        ← Volver al chat
-      </a>
+      <a class="admin-back" href="{{ url_for('chat.index') }}">← Volver al chat</a>
       <h1>Panel de administración</h1>
-
-      <!-- Theme toggle -->
       <div class="theme-toggle" style="margin-left:auto;" role="group" aria-label="Tema">
         <button class="theme-btn" data-theme-value="light" title="Claro">☀</button>
         <button class="theme-btn" data-theme-value="dark" title="Oscuro">☾</button>
@@ -19,7 +15,6 @@
       </div>
     </div>
 
-    <!-- ── Usuarios ─────────────────────────────────────────────────────── -->
     <section class="admin-section">
       <h2 class="section-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -29,16 +24,11 @@
         </svg>
         Gestión de usuarios
       </h2>
-
       <div style="overflow-x:auto;">
         <table class="users-table" aria-label="Usuarios">
           <thead>
             <tr>
-              <th>Usuario</th>
-              <th>Rol</th>
-              <th>Contraseña</th>
-              <th>Creado</th>
-              <th>Acciones</th>
+              <th>Usuario</th><th>Rol</th><th>Contraseña</th><th>Creado</th><th>Acciones</th>
             </tr>
           </thead>
           <tbody id="users-tbody">
@@ -46,8 +36,6 @@
           </tbody>
         </table>
       </div>
-
-      <!-- Crear usuario -->
       <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:20px;">
         <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px;">Crear nuevo usuario</h3>
         <div id="create-user-error" class="error-msg" style="display:none;margin-bottom:12px;" role="alert"></div>
@@ -77,7 +65,6 @@
       </div>
     </section>
 
-    <!-- ── Configuración Ollama ──────────────────────────────────────────── -->
     <section class="admin-section">
       <h2 class="section-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -86,23 +73,18 @@
         </svg>
         Configuración de Ollama
       </h2>
-
       <div class="ollama-config">
         <div style="flex:1;">
           <label class="form-label" for="ollama-host-input">URL de la API de Ollama</label>
-          <input class="form-input" type="url" id="ollama-host-input"
-            placeholder="http://192.168.1.100:11434"
-            value="{{ config.OLLAMA_HOST if config is defined else '' }}">
+          <input class="form-input" type="url" id="ollama-host-input" placeholder="http://192.168.1.100:11434">
         </div>
         <button class="btn-sm" id="save-ollama-btn" style="height:38px;">Guardar</button>
         <button class="btn-sm" id="test-ollama-btn" style="height:38px;">Probar conexión</button>
         <div class="ollama-status-badge" id="ollama-test-status">–</div>
       </div>
-
       <ul id="ollama-model-list" style="margin-top:12px;padding-left:20px;font-size:.85rem;color:var(--text-secondary);list-style:disc;"></ul>
     </section>
 
-    <!-- ── Actualización ─────────────────────────────────────────────────── -->
     <section class="admin-section">
       <h2 class="section-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">

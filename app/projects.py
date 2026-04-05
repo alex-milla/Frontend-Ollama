@@ -1,6 +1,5 @@
 """
 Blueprint de proyectos y habilidades.
-Cada usuario gestiona sus propios proyectos y habilidades.
 """
 from flask import Blueprint, g, jsonify, request, render_template, current_app
 from .auth import login_required
@@ -11,18 +10,14 @@ bp = Blueprint("projects", __name__, url_prefix="/projects")
 
 _MAX_NAME = 128
 _MAX_DESC = 512
-_MAX_CONTENT = 64 * 1024  # 64 KB por habilidad
+_MAX_CONTENT = 64 * 1024
 
-
-# ── Vistas HTML ───────────────────────────────────────────────────────────────
 
 @bp.route("/")
 @login_required
 def index():
     return render_template("projects.html", user=g.user)
 
-
-# ── API: Proyectos ────────────────────────────────────────────────────────────
 
 @bp.route("/api/projects", methods=["GET"])
 @login_required
@@ -125,8 +120,6 @@ def api_project_system_prompt(project_id):
     db.close()
     return jsonify({"system_prompt": prompt})
 
-
-# ── API: Habilidades ──────────────────────────────────────────────────────────
 
 @bp.route("/api/skills", methods=["GET"])
 @login_required

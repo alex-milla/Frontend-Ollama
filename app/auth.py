@@ -1,8 +1,5 @@
 """
 Blueprint de autenticación.
-- Todas las rutas de POST validan CSRF implícitamente via SameSite=Lax + Referer check.
-- Passwords hashed con werkzeug pbkdf2.
-- No se revelan si el usuario existe o la password es incorrecta (mismo mensaje).
 """
 import re
 import functools
@@ -20,10 +17,7 @@ bp = Blueprint("auth", __name__)
 _MIN_PASSWORD_LEN = 8
 
 
-# ── Decoradores ───────────────────────────────────────────────────────────────
-
 def login_required(view):
-    """Redirige a login si no hay sesión activa."""
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
         if g.user is None:
@@ -35,7 +29,6 @@ def login_required(view):
 
 
 def admin_required(view):
-    """Requiere rol admin además de login."""
     @functools.wraps(view)
     @login_required
     def wrapped(*args, **kwargs):
@@ -44,8 +37,6 @@ def admin_required(view):
         return view(*args, **kwargs)
     return wrapped
 
-
-# ── Before request ────────────────────────────────────────────────────────────
 
 @bp.before_app_request
 def load_logged_in_user():
@@ -57,8 +48,6 @@ def load_logged_in_user():
         g.user = models.get_user_by_id(db, user_id)
         db.close()
 
-
-# ── Rutas ─────────────────────────────────────────────────────────────────────
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
@@ -74,7 +63,6 @@ def login():
         user = models.get_user_by_username(db, username)
         db.close()
 
-        # Mensaje genérico para no revelar si el usuario existe
         if user is None or not check_password_hash(user["password_hash"], password):
             error = "Usuario o contraseña incorrectos."
         else:

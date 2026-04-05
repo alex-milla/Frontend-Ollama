@@ -15,13 +15,11 @@
     </div>
   </div>
 
-  <!-- Tabs -->
   <div style="display:flex;gap:8px;margin-bottom:24px;">
     <button class="icon-btn tab-btn active" data-tab="projects">📁 Proyectos</button>
     <button class="icon-btn tab-btn" data-tab="skills">⚡ Habilidades</button>
   </div>
 
-  <!-- ── TAB: Proyectos ──────────────────────────────────────────────────── -->
   <div id="tab-projects">
     <section class="admin-section">
       <h2 class="section-title">Mis proyectos</h2>
@@ -44,7 +42,6 @@
     </section>
   </div>
 
-  <!-- ── TAB: Habilidades ───────────────────────────────────────────────── -->
   <div id="tab-skills" style="display:none;">
     <section class="admin-section">
       <h2 class="section-title">Mis habilidades</h2>
@@ -65,7 +62,7 @@
           <label class="form-label">Contenido en Markdown (system prompt)</label>
           <textarea class="form-input" id="new-skill-content" rows="8"
             style="font-family:var(--font-mono);font-size:.83rem;resize:vertical;"
-            placeholder="# Analista de código&#10;&#10;Eres un experto analista de código. Tu objetivo es..."></textarea>
+            placeholder="# Analista de código&#10;&#10;Eres un experto analista de código..."></textarea>
         </div>
         <button class="btn-primary" style="max-width:200px;" id="btn-create-skill">Crear habilidad</button>
         <div id="skill-error" class="error-msg" style="display:none;margin-top:8px;"></div>
@@ -76,7 +73,6 @@
 </div>
 </div>
 
-<!-- Modal editar proyecto -->
 <div id="modal-project" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:480px;">
     <h3>Editar proyecto</h3>
@@ -102,7 +98,6 @@
   </div>
 </div>
 
-<!-- Modal editar habilidad -->
 <div id="modal-skill" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:640px;width:100%;">
     <h3>Editar habilidad</h3>

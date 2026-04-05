@@ -4,9 +4,7 @@
 {% block body %}
 <div class="app-shell">
 
-  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
   <aside class="sidebar" id="sidebar" aria-label="Conversaciones">
-
     <div class="sidebar-header">
       <div class="sidebar-logo">
         <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
@@ -24,7 +22,6 @@
       </button>
     </div>
 
-    <!-- Selector de proyecto -->
     <div style="padding:8px 12px;border-bottom:1px solid var(--border-sidebar);">
       <label style="font-size:.7rem;font-weight:600;color:var(--text-sidebar-muted);letter-spacing:.05em;text-transform:uppercase;display:block;margin-bottom:4px;">Proyecto</label>
       <select id="project-select" style="width:100%;padding:6px 8px;background:var(--bg-sidebar-hover);border:1px solid var(--border-sidebar);border-radius:var(--radius-sm);color:var(--text-sidebar);font-family:var(--font-sans);font-size:.82rem;cursor:pointer;">
@@ -32,7 +29,6 @@
       </select>
     </div>
 
-    <!-- Habilidades activas (solo cuando hay proyecto) -->
     <div id="skills-panel" style="padding:8px 12px;border-bottom:1px solid var(--border-sidebar);display:none;">
       <label style="font-size:.7rem;font-weight:600;color:var(--text-sidebar-muted);letter-spacing:.05em;text-transform:uppercase;display:block;margin-bottom:6px;">Habilidades activas</label>
       <div id="skills-chips" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
@@ -60,7 +56,6 @@
   </aside>
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-  <!-- ── Chat principal ──────────────────────────────────────────────────── -->
   <main class="chat-main">
     <div class="chat-topbar">
       <button class="btn-sidebar-toggle icon-btn" id="btn-sidebar-toggle" aria-label="Abrir sidebar">
@@ -75,7 +70,6 @@
         </select>
       </div>
 
-      <!-- Badge de proyecto activo -->
       <div id="project-badge" style="display:none;padding:4px 10px;background:var(--accent-light);border:1px solid var(--accent);border-radius:20px;font-size:.75rem;font-weight:600;color:var(--accent);"></div>
 
       <div class="ollama-status">

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Genera un certificado autofirmado válido 10 años para uso LAN/interno.
-# Uso: sudo bash nginx/generate-cert.sh [IP_o_dominio]
 set -euo pipefail
 
 CERT_DIR="/etc/ssl/frontend-ollama"
@@ -22,7 +21,6 @@ openssl req -new -x509 \
   -addext "subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:$SUBJECT_CN" \
   2>/dev/null
 
-# Permisos: solo root puede leer la clave privada
 chmod 600 "$CERT_DIR/key.pem"
 chmod 644 "$CERT_DIR/cert.pem"
 

@@ -46,13 +46,11 @@ info "Puerto HTTPS:  $HTTPS_PORT"
 info "Cert CN:       $CERT_CN"
 echo ""
 
-# ── 1. Dependencias ────────────────────────────────────────────────────────────
 info "Instalando dependencias del sistema…"
 apt-get update -qq
 apt-get install -y -qq python3 python3-pip python3-venv nginx openssl git curl 2>/dev/null
 log "Dependencias instaladas"
 
-# ── 2. Usuario ─────────────────────────────────────────────────────────────────
 if ! id "$SERVICE_USER" &>/dev/null; then
     info "Creando usuario de sistema '$SERVICE_USER'…"
     useradd --system --no-create-home --shell /usr/sbin/nologin \
@@ -62,7 +60,6 @@ else
     log "Usuario '$SERVICE_USER' ya existe"
 fi
 
-# ── 3. Repositorio ─────────────────────────────────────────────────────────────
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "Actualizando repositorio existente…"
     git -C "$INSTALL_DIR" pull --quiet
@@ -72,37 +69,33 @@ else
 fi
 log "Repositorio listo en $INSTALL_DIR"
 
-# ── 4. Virtualenv ──────────────────────────────────────────────────────────────
 info "Creando virtualenv y instalando dependencias Python…"
 python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$INSTALL_DIR/venv/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
 log "Virtualenv listo"
 
-# ── 5. Directorios ─────────────────────────────────────────────────────────────
 info "Creando directorios de datos y logs…"
 mkdir -p "$INSTALL_DIR/data/uploads"
 mkdir -p "$LOG_DIR"
 log "Directorios creados"
 
-# ── 6. config.env ─────────────────────────────────────────────────────────────
 if [[ ! -f "$INSTALL_DIR/config.env" ]]; then
     info "Generando config.env…"
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    cat > "$INSTALL_DIR/config.env" <<EOF
+    cat > "$INSTALL_DIR/config.env" <<EOF2
 # Generado automáticamente por install.sh — $(date -u +%Y-%m-%dT%H:%M:%SZ)
 OLLAMA_HOST=${OLLAMA_HOST}
 SECRET_KEY=${SECRET_KEY}
 DB_PATH=${INSTALL_DIR}/data/ollama-chat.db
 UPLOAD_FOLDER=${INSTALL_DIR}/data/uploads
 MAX_CONTENT_LENGTH=10485760
-EOF
+EOF2
     log "config.env generado"
 else
     warn "config.env ya existe, no se sobreescribe"
 fi
 
-# ── 7. Certificado SSL ─────────────────────────────────────────────────────────
 if [[ ! -f "/etc/ssl/frontend-ollama/cert.pem" ]]; then
     info "Generando certificado autofirmado para '$CERT_CN'…"
     bash "$INSTALL_DIR/nginx/generate-cert.sh" "$CERT_CN"
@@ -111,7 +104,6 @@ else
     log "Certificado ya existe, no se regenera"
 fi
 
-# ── 8. NGINX ───────────────────────────────────────────────────────────────────
 info "Configurando NGINX…"
 NGINX_CONF="$INSTALL_DIR/nginx/frontend-ollama.conf"
 if [[ "$HTTPS_PORT" != "443" ]]; then
@@ -124,44 +116,28 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t || die "La configuración de NGINX tiene errores"
 log "NGINX configurado"
 
-# ── 9. Permisos ────────────────────────────────────────────────────────────────
 info "Aplicando permisos…"
-
-# app/ — legible por todos (gunicorn necesita importar los módulos como frontollama)
 chown -R root:root "$INSTALL_DIR/app"
 find "$INSTALL_DIR/app" -type d -exec chmod 755 {} \;
 find "$INSTALL_DIR/app" -type f -exec chmod 644 {} \;
-
-# data/ — frontollama propietario; 711 para que nginx pueda traversar hasta el socket
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR/data"
 chmod 711 "$INSTALL_DIR/data"
-
-# config.env
 chown root:"$SERVICE_USER" "$INSTALL_DIR/config.env"
 chmod 640 "$INSTALL_DIR/config.env"
-
-# venv — 755 para que systemd pueda ejecutar gunicorn sin importar el grupo activo
 chown -R root:root "$INSTALL_DIR/venv"
 chmod -R 755 "$INSTALL_DIR/venv"
-
-# update.sh
 chown root:root "$INSTALL_DIR/update.sh" 2>/dev/null || true
 chmod 700 "$INSTALL_DIR/update.sh" 2>/dev/null || true
-
-# Logs
 chown root:"$SERVICE_USER" "$LOG_DIR"
 chmod 775 "$LOG_DIR"
-
 log "Permisos aplicados"
 
-# ── 10. Systemd ────────────────────────────────────────────────────────────────
 info "Instalando servicio systemd…"
 cp "$INSTALL_DIR/systemd/frontend-ollama.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --quiet frontend-ollama
 log "Servicio systemd instalado y habilitado"
 
-# ── 11. Base de datos ──────────────────────────────────────────────────────────
 info "Inicializando base de datos…"
 sudo -u "$SERVICE_USER" bash -c "
     cd '$INSTALL_DIR' && \
@@ -172,13 +148,11 @@ chown "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR/data/ollama-chat.db" 2>/dev/
 chmod 600 "$INSTALL_DIR/data/ollama-chat.db" 2>/dev/null || true
 log "Base de datos inicializada"
 
-# ── 12. Arrancar servicios ─────────────────────────────────────────────────────
 info "Arrancando servicios…"
 systemctl restart frontend-ollama
 systemctl restart nginx
 log "Servicios arrancados"
 
-# ── 13. Health check ───────────────────────────────────────────────────────────
 info "Comprobando que el servicio responde…"
 sleep 3
 for i in {1..10}; do
