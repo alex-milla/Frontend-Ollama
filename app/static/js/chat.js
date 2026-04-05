@@ -273,7 +273,7 @@
     if (!msgs.length) { showEmptyState(); return; }
     messagesInner.innerHTML = "";
     msgs.forEach(m => appendMessage(m.role, m.content));
-    renderContinueBtn();
+    // Al cargar conversación histórica no mostramos ningún indicador
     scrollToBottom();
   }
 
@@ -320,8 +320,31 @@
     chatTextarea.disabled  = val;
   }
 
-  // ── Botón Continuar ───────────────────────────────────────────────────────────
+  // ── Indicador fin / botón continuar ──────────────────────────────────────────
 
+  // Llamado cuando [DONE] llega correctamente: muestra "✓ Completado" y desaparece
+  function renderDoneIndicator() {
+    document.getElementById("continue-btn-wrap")?.remove();
+    const wrap = document.createElement("div");
+    wrap.id = "continue-btn-wrap";
+    wrap.style.cssText = "display:flex;justify-content:center;padding:10px 0 4px;";
+    wrap.innerHTML = `
+      <span id="done-indicator" style="
+        font-size:.76rem;color:var(--text-secondary);
+        display:flex;align-items:center;gap:5px;opacity:1;
+        transition:opacity 1s ease;">
+        ✓ Respuesta completada
+      </span>`;
+    messagesInner.appendChild(wrap);
+    // Desvanecer y eliminar tras 3 s
+    setTimeout(() => {
+      const el = document.getElementById("done-indicator");
+      if (el) { el.style.opacity = "0"; setTimeout(() => wrap.remove(), 1000); }
+    }, 3000);
+  }
+
+  // Llamado cuando el stream se corta (timeout, error de red, abort manual):
+  // muestra botón para que el usuario retome cuando quiera
   function renderContinueBtn() {
     document.getElementById("continue-btn-wrap")?.remove();
     if (!currentConvId) return;
@@ -452,9 +475,8 @@
           if (raw === "[DONE]") {
             clearInterval(watchdog);
             setStreaming(false);
-            // Renderizado final: texto plano con saltos de línea respetados
             if (assistantBubble) setPlainText(assistantBubble, fullText);
-            renderContinueBtn();
+            renderDoneIndicator();   // ✓ terminó correctamente
             await loadConversations();
             return;
           }
