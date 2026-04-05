@@ -1,7 +1,6 @@
 """
 Blueprint de chat con soporte de proyectos, habilidades, adjuntos y exportación.
-Sesión 5 (v3): OCR de imágenes con Tesseract. El texto extraído se inyecta
-               en el mensaje como contexto, igual que PDF/DOCX.
+Versión sesión 4 — sin soporte de imágenes.
 """
 import json
 import xml.etree.ElementTree as ET
@@ -270,38 +269,19 @@ def api_upload():
     if not f or not f.filename:
         return jsonify({"error": "Archivo vacío"}), 400
 
-    conv_id   = request.form.get("conversation_id", type=int)
-    model     = request.form.get("model", "").strip()[:128]
-    mime_type = f.content_type or "application/octet-stream"
-
-    # Extraer extensión ANTES de secure_filename para no perderla
-    raw_name = f.filename or ""
-    raw_ext  = Path(raw_name).suffix.lower()
-    original_name = secure_filename(raw_name) or ("archivo" + raw_ext)
-    if raw_ext and not original_name.lower().endswith(raw_ext):
-        original_name = original_name + raw_ext
-
-    file_bytes = f.read()
-    size_bytes = len(file_bytes)
+    conv_id       = request.form.get("conversation_id", type=int)
+    original_name = secure_filename(f.filename)
+    mime_type     = f.content_type or "application/octet-stream"
+    file_bytes    = f.read()
+    size_bytes    = len(file_bytes)
 
     file_type = fp.resolve_file_type(mime_type, original_name)
-    if file_type is None and raw_ext:
-        file_type = fp.resolve_file_type("application/octet-stream", "x" + raw_ext)
     if file_type is None:
         return jsonify({"error": f"Tipo de archivo no soportado: {original_name}"}), 415
 
-    # Para imágenes: verificar que Tesseract está disponible
-    if file_type == "image" and not fp.tesseract_available():
-        return jsonify({
-            "error": (
-                "Tesseract OCR no está instalado en el servidor. "
-                "Ejecuta: apt-get install tesseract-ocr tesseract-ocr-spa "
-                "&& pip install pytesseract pillow --break-system-packages"
-            )
-        }), 503
-
     db = get_db(current_app.config["DB_PATH"])
     if not conv_id:
+        model = request.form.get("model", "")
         conv_id = models.create_conversation(db, g.user["id"], model, None)
 
     conv = models.get_conversation(db, conv_id, g.user["id"])
@@ -313,7 +293,7 @@ def api_upload():
         chunks = fp.extract_text(file_bytes, file_type)
     except Exception as exc:
         db.close()
-        return jsonify({"error": str(exc)}), 422
+        return jsonify({"error": f"Error extrayendo texto: {exc}"}), 422
 
     chunk_unit  = fp.chunk_unit_for(file_type)
     chunk_count = len(chunks)
@@ -321,7 +301,7 @@ def api_upload():
 
     filename_stored, extracted_text_path = fp.save_upload(
         file_bytes, file_type, conv_id,
-        current_app.config["UPLOAD_FOLDER"],
+        current_app.config["UPLOAD_FOLDER"]
     )
 
     att_id = models.create_attachment(
@@ -330,10 +310,7 @@ def api_upload():
     )
     db.close()
 
-    # Para imágenes: preview del texto OCR (primeros 300 chars)
-    preview_chunk = ""
-    if chunks:
-        preview_chunk = chunks[0][:300] if file_type == "image" else chunks[0][:2000]
+    preview_chunk = chunks[0][:2000] if chunks else ""
 
     return jsonify({
         "attachment_id":   att_id,
@@ -342,7 +319,6 @@ def api_upload():
         "chunk_unit":      chunk_unit,
         "chunk_count":     chunk_count,
         "is_long":         long_file,
-        "is_image":        file_type == "image",
         "preview_chunk":   preview_chunk,
     }), 201
 

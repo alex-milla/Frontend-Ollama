@@ -1,12 +1,14 @@
 """
 file_processor.py — Extracción de texto y chunking por tipo de archivo.
-Sesión 5 (v3): OCR de imágenes con Tesseract (pytesseract).
-               Tesseract es preciso para texto impreso, capturas y documentos.
+
+Criterios de "archivo largo" (requiere selector de rango):
+  - PDF:       > 20 páginas  O  texto total > 50 000 caracteres
+  - DOCX/TXT:  texto total > 50 000 caracteres
+  - CSV/XLSX:  > 500 filas de datos
 """
 import io
 import csv
 import uuid
-import base64
 import logging
 from pathlib import Path
 
@@ -25,18 +27,14 @@ CHUNK_SIZES = {
 ALLOWED_EXTENSIONS = {
     "application/pdf":                                                          "pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document":  "docx",
-    "text/plain":             "txt",
-    "text/markdown":          "txt",
-    "text/x-python":          "txt",
-    "text/x-python-script":   "txt",
+    "text/plain":           "txt",
+    "text/markdown":        "txt",
+    "text/x-python":        "txt",
+    "text/x-python-script": "txt",
     "application/javascript": "txt",
-    "application/json":       "txt",
-    "text/csv":               "csv",
+    "application/json":     "txt",
+    "text/csv":             "csv",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-    "image/jpeg":             "image",
-    "image/jpg":              "image",
-    "image/png":              "image",
-    "image/webp":             "image",
     "application/octet-stream": None,
 }
 
@@ -50,16 +48,7 @@ EXTENSION_MAP = {
     ".json": "txt",
     ".csv":  "csv",
     ".xlsx": "xlsx",
-    ".jpg":  "image",
-    ".jpeg": "image",
-    ".png":  "image",
-    ".webp": "image",
 }
-
-VISION_MODEL_HINTS = [
-    "llava", "moondream", "vision", "minicpm-v", "bakllava",
-    "cogvlm", "qwen-vl", "internvl",
-]
 
 
 def resolve_file_type(mime_type: str, filename: str) -> str | None:
@@ -70,23 +59,7 @@ def resolve_file_type(mime_type: str, filename: str) -> str | None:
     return EXTENSION_MAP.get(ext)
 
 
-def is_vision_model(model_name: str) -> bool:
-    name_lower = (model_name or "").lower()
-    return any(hint in name_lower for hint in VISION_MODEL_HINTS)
-
-
-def tesseract_available() -> bool:
-    """Comprueba si pytesseract y Tesseract están instalados."""
-    try:
-        import pytesseract
-        pytesseract.get_tesseract_version()
-        return True
-    except Exception:
-        return False
-
-
-def extract_text(file_bytes: bytes, file_type: str,
-                 ollama_host: str = "", model: str = "") -> list[str]:
+def extract_text(file_bytes: bytes, file_type: str) -> list[str]:
     if file_type == "pdf":
         return _extract_pdf(file_bytes)
     elif file_type == "docx":
@@ -97,85 +70,8 @@ def extract_text(file_bytes: bytes, file_type: str,
         return _extract_csv(file_bytes)
     elif file_type == "xlsx":
         return _extract_xlsx(file_bytes)
-    elif file_type == "image":
-        return _extract_image_tesseract(file_bytes)
     raise ValueError(f"Tipo de archivo no soportado: {file_type}")
 
-
-# ── OCR con Tesseract ─────────────────────────────────────────────────────────
-
-def _extract_image_tesseract(data: bytes) -> list[str]:
-    """
-    Extrae texto de una imagen usando Tesseract OCR.
-    Detecta automáticamente si el texto es español o inglés.
-    Devuelve lista de un único chunk con el texto extraído.
-    """
-    try:
-        import pytesseract
-        from PIL import Image
-    except ImportError:
-        raise ValueError(
-            "Tesseract no está instalado. Ejecuta: "
-            "apt-get install tesseract-ocr tesseract-ocr-spa && "
-            "pip install pytesseract pillow --break-system-packages"
-        )
-
-    try:
-        image = Image.open(io.BytesIO(data))
-
-        # Convertir a RGB si es necesario (PNG con transparencia, etc.)
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
-
-        # Intentar con español + inglés primero (cubre la mayoría de casos)
-        # Si falla el idioma spa, caer a eng solo
-        langs = _available_tesseract_langs()
-        if "spa" in langs and "eng" in langs:
-            lang = "spa+eng"
-        elif "spa" in langs:
-            lang = "spa"
-        else:
-            lang = "eng"
-
-        # Configuración optimizada para capturas de pantalla y documentos
-        # PSM 6: asume bloque de texto uniforme (mejor para capturas)
-        # PSM 3: detección automática (mejor para documentos con layout)
-        # Probamos PSM 6 primero, si el resultado es corto probamos PSM 3
-        config_6 = "--psm 6 --oem 3"
-        config_3 = "--psm 3 --oem 3"
-
-        text_6 = pytesseract.image_to_string(image, lang=lang, config=config_6).strip()
-        text_3 = pytesseract.image_to_string(image, lang=lang, config=config_3).strip()
-
-        # Usar el resultado más largo (más texto extraído = mejor)
-        text = text_6 if len(text_6) >= len(text_3) else text_3
-
-        if not text:
-            raise ValueError(
-                "Tesseract no encontró texto en la imagen. "
-                "Comprueba que la imagen tiene buena resolución y el texto es legible."
-            )
-
-        log.info("Tesseract OCR: %d caracteres extraídos (lang=%s)", len(text), lang)
-        return [text]
-
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError(f"Error procesando imagen con Tesseract: {exc}") from exc
-
-
-def _available_tesseract_langs() -> set[str]:
-    """Devuelve los idiomas instalados en Tesseract."""
-    try:
-        import pytesseract
-        langs = pytesseract.get_languages(config="")
-        return set(langs)
-    except Exception:
-        return {"eng"}
-
-
-# ── PDF ───────────────────────────────────────────────────────────────────────
 
 def _chunk_text(text: str, size: int) -> list[str]:
     return [text[i:i + size] for i in range(0, max(1, len(text)), size)]
@@ -273,27 +169,20 @@ def _extract_xlsx(data: bytes) -> list[str]:
     return chunks or [""]
 
 
-# ── Metadatos de chunking ─────────────────────────────────────────────────────
-
 def chunk_unit_for(file_type: str) -> str:
     return {"pdf": "page", "csv": "row", "xlsx": "row"}.get(file_type, "block")
 
 
 def is_long(chunks: list[str], file_type: str) -> bool:
-    if file_type == "image":
-        return False
     return len(chunks) > 1
 
 
-# ── Guardado en disco ─────────────────────────────────────────────────────────
-
 def save_upload(file_bytes: bytes, file_type: str, conv_id: int,
-                upload_folder: str,
-                ollama_host: str = "", model: str = "") -> tuple[str, str]:
+                upload_folder: str) -> tuple[str, str]:
     base    = str(uuid.uuid4())
     ext_map = {
         "pdf": ".pdf", "docx": ".docx", "txt": ".txt",
-        "csv": ".csv", "xlsx": ".xlsx", "image": ".img",
+        "csv": ".csv", "xlsx": ".xlsx",
     }
     ext = ext_map.get(file_type, ".bin")
 
@@ -305,8 +194,7 @@ def save_upload(file_bytes: bytes, file_type: str, conv_id: int,
     orig_path.write_bytes(file_bytes)
     orig_path.chmod(0o600)
 
-    chunks    = extract_text(file_bytes, file_type,
-                             ollama_host=ollama_host, model=model)
+    chunks    = extract_text(file_bytes, file_type)
     full_text = "\n\n--- [CHUNK BOUNDARY] ---\n\n".join(chunks)
     txt_path  = conv_dir / (base + ".txt")
     txt_path.write_text(full_text, encoding="utf-8")
@@ -327,14 +215,3 @@ def get_chunk_range(extracted_text_path: str, from_idx: int,
     from_0    = max(0, from_idx - 1)
     to_0      = min(total, to_idx)
     return "\n\n".join(chunks[from_0:to_0]), total
-
-
-def read_image_base64(extracted_text_path: str) -> str | None:
-    """Lee el base64 guardado para una imagen adjunta (no usado con Tesseract)."""
-    txt_path = Path(extracted_text_path)
-    if not txt_path.exists():
-        return None
-    content = txt_path.read_text(encoding="utf-8").strip()
-    if "--- [CHUNK BOUNDARY] ---" in content:
-        content = content.split("--- [CHUNK BOUNDARY] ---")[0].strip()
-    return content if content else None
