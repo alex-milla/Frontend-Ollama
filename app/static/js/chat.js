@@ -50,7 +50,23 @@
     // 1. Proteger bloques de código (no se procesan por dentro)
     const codeBlocks = [];
     let s = raw.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-      codeBlocks.push(`<pre><code class="lang-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
+      const langLabel = lang || 'text';
+      const copyId    = 'cp-' + Math.random().toString(36).slice(2,9);
+      const escaped   = esc(code.trim());
+      codeBlocks.push(
+        '<div class="code-block">' +
+          '<div class="code-block-header">' +
+            '<span>' + langLabel + '</span>' +
+            '<button class="code-block-copy" onclick="' +
+              'var t=document.getElementById(\'' + copyId + '\');' +
+              'navigator.clipboard.writeText(t.innerText).then(function(){' +
+                'this.textContent=\'✓ Copiado\';' +
+                'var b=this;setTimeout(function(){b.textContent=\'Copiar\'},2000)' +
+              '}.bind(this))">Copiar</button>' +
+          '</div>' +
+          '<pre><code id="' + copyId + '" class="lang-' + langLabel + '">' + escaped + '</code></pre>' +
+        '</div>'
+      );
       return `\x00C${codeBlocks.length - 1}\x00`;
     });
 

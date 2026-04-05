@@ -380,28 +380,83 @@
 }
 
 .message-bubble code {
-  background: var(--code-bg);
-  border: 1px solid var(--code-border);
+  background: rgba(110,118,129,.15);
+  border: 1px solid rgba(110,118,129,.25);
   border-radius: 4px;
-  padding: 1px 5px;
+  padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: .82em;
+  color: var(--text-primary);
+}
+
+/* Bloque de código — siempre fondo oscuro independiente del tema */
+.message-bubble .code-block {
+  margin: .8em 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.08);
+}
+
+.message-bubble .code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1e1e2e;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: #8b8fa8;
+  letter-spacing: .04em;
+  text-transform: lowercase;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+.message-bubble .code-block-copy {
+  background: none;
+  border: none;
+  color: #8b8fa8;
+  cursor: pointer;
+  font-size: .72rem;
+  font-family: var(--font-sans);
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 150ms, background 150ms;
+}
+.message-bubble .code-block-copy:hover {
+  color: #cdd6f4;
+  background: rgba(255,255,255,.08);
 }
 
 .message-bubble pre {
-  background: var(--code-bg);
-  border: 1px solid var(--code-border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  background: #13131f;
+  margin: 0;
+  padding: 14px 16px;
   overflow-x: auto;
-  margin: .6em 0;
+  line-height: 1.6;
 }
+
 .message-bubble pre code {
   background: none;
   border: none;
   padding: 0;
-  font-size: .83rem;
+  font-family: var(--font-mono);
+  font-size: .84rem;
+  color: #cdd6f4;
 }
+
+/* Colores de sintaxis básicos por clase lang- */
+.lang-bash .message-bubble pre code,
+.message-bubble pre code.lang-bash    { color: #a6e3a1; }
+.message-bubble pre code.lang-python  { color: #cba6f7; }
+.message-bubble pre code.lang-js,
+.message-bubble pre code.lang-javascript { color: #f9e2af; }
+.message-bubble pre code.lang-json    { color: #89dceb; }
+.message-bubble pre code.lang-sql,
+.message-bubble pre code.lang-kql,
+.message-bubble pre code.lang-kusto   { color: #89b4fa; }
+.message-bubble pre code.lang-css     { color: #f38ba8; }
+.message-bubble pre code.lang-html,
+.message-bubble pre code.lang-xml     { color: #fab387; }
 
 /* ── Botón Continuar respuesta ───────────────────────────────────── */
 
