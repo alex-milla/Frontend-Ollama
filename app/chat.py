@@ -270,14 +270,29 @@ def api_upload():
     if not f or not f.filename:
         return jsonify({"error": "Archivo vacío"}), 400
 
-    conv_id       = request.form.get("conversation_id", type=int)
-    model         = request.form.get("model", "").strip()[:128]
-    original_name = secure_filename(f.filename)
-    mime_type     = f.content_type or "application/octet-stream"
-    file_bytes    = f.read()
-    size_bytes    = len(file_bytes)
+    conv_id   = request.form.get("conversation_id", type=int)
+    model     = request.form.get("model", "").strip()[:128]
+    mime_type = f.content_type or "application/octet-stream"
 
+    # Extraer extensión del nombre original ANTES de sanitizarlo,
+    # porque secure_filename puede eliminar caracteres que dejan sin extensión.
+    raw_name  = f.filename or ""
+    raw_ext   = Path(raw_name).suffix.lower()          # e.g. ".png"
+
+    original_name = secure_filename(raw_name) or ("archivo" + raw_ext)
+
+    # Si secure_filename eliminó la extensión, reponerla
+    if raw_ext and not original_name.lower().endswith(raw_ext):
+        original_name = original_name + raw_ext
+
+    file_bytes = f.read()
+    size_bytes = len(file_bytes)
+
+    # Resolver tipo: primero por extensión original (más fiable que el MIME
+    # cuando el navegador envía application/octet-stream)
     file_type = fp.resolve_file_type(mime_type, original_name)
+    if file_type is None and raw_ext:
+        file_type = fp.resolve_file_type("application/octet-stream", "x" + raw_ext)
     if file_type is None:
         return jsonify({"error": f"Tipo de archivo no soportado: {original_name}"}), 415
 
