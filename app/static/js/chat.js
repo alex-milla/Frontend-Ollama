@@ -1,9 +1,9 @@
 /**
  * chat.js — Chat con soporte de proyectos, habilidades, adjuntos y exportación.
- * v4.4:
- *  - Respuestas del asistente en texto plano (sin renderizado markdown)
- *  - Botón ■ Parar para cancelar el streaming en curso
- *  - Botón "Continuar respuesta" corregido (mantiene conv_id)
+ * v4.5:
+ *  - Markdown renderizado correctamente (negrita, listas, código, tablas, etc.)
+ *  - Botón ■ Parar para cancelar el streaming
+ *  - ✓ Respuesta completada / ▶ Continuar solo si se corta
  *  - Watchdog de 45 s ante cuelgues
  */
 (function () {
@@ -15,7 +15,7 @@
   let currentProject  = null;
   let activeSkillIds  = [];
   let allProjects     = [];
-  let abortController = null; // para cancelar el stream
+  let abortController = null;
 
   // ── DOM refs ──────────────────────────────────────────────────────────────────
   const messagesArea   = document.getElementById("messages-area");
@@ -40,6 +40,119 @@
   window.getCurrentConvId    = () => currentConvId;
   window.getCurrentProjectId = () => currentProject ? currentProject.id : null;
   window.setCurrentConvId    = (id) => { currentConvId = id; setActiveConv(id); };
+
+  // ── Renderizador Markdown ─────────────────────────────────────────────────────
+  // Sin dependencias externas. Procesa en orden para evitar solapamientos.
+
+  function md(raw) {
+    if (!raw) return "";
+
+    // 1. Proteger bloques de código (no se procesan por dentro)
+    const codeBlocks = [];
+    let s = raw.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      codeBlocks.push(`<pre><code class="lang-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
+      return `\x00C${codeBlocks.length - 1}\x00`;
+    });
+
+    // 2. Escapar HTML del resto (seguridad)
+    s = esc(s);
+
+    // 3. Código inline (después del escape)
+    s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+
+    // 4. Headings
+    s = s.replace(/^#### (.+)$/gm, "<h4>$1</h4>");
+    s = s.replace(/^### (.+)$/gm,  "<h3>$1</h3>");
+    s = s.replace(/^## (.+)$/gm,   "<h2>$1</h2>");
+    s = s.replace(/^# (.+)$/gm,    "<h1>$1</h1>");
+
+    // 5. Bold + italic combinado, luego por separado
+    s = s.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+    s = s.replace(/\*\*(.+?)\*\*/g,     "<strong>$1</strong>");
+    s = s.replace(/\*([^*\n]+?)\*/g,    "<em>$1</em>");
+
+    // 6. Líneas horizontales
+    s = s.replace(/^(---+|===+)$/gm, "<hr>");
+
+    // 7. Blockquotes
+    s = s.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
+    s = s.replace(/<\/blockquote>\n<blockquote>/g, "<br>");
+
+    // 8. Tablas GFM
+    s = s.replace(/((?:^\|.+\|\n)+)/gm, (table) => {
+      const rows = table.trim().split("\n");
+      if (rows.length < 2) return table;
+      const isSep = r => /^\|[\s\-:|]+\|$/.test(r.trim());
+      let html = "<table>", headDone = false;
+      rows.forEach((row, i) => {
+        if (isSep(row)) { html += "</thead><tbody>"; headDone = true; return; }
+        const cells = row.split("|").slice(1, -1).map(c => c.trim());
+        if (i === 0 && !headDone) {
+          html += "<thead><tr>" + cells.map(c => `<th>${c}</th>`).join("") + "</tr>";
+        } else {
+          html += "<tr>" + cells.map(c => `<td>${c}</td>`).join("") + "</tr>";
+        }
+      });
+      if (!headDone) html += "</thead><tbody>";
+      return html + "</tbody></table>";
+    });
+
+    // 9. Listas — procesamos línea a línea para manejar anidación y mezcla
+    const lines = s.split("\n");
+    const out = [];
+    let ulOpen = false, olOpen = false;
+
+    for (const line of lines) {
+      const ul = line.match(/^[\*\-] (.+)$/);
+      const ol = line.match(/^\d+\. (.+)$/);
+      if (ul) {
+        if (olOpen) { out.push("</ol>"); olOpen = false; }
+        if (!ulOpen) { out.push("<ul>"); ulOpen = true; }
+        out.push(`<li>${ul[1]}</li>`);
+      } else if (ol) {
+        if (ulOpen) { out.push("</ul>"); ulOpen = false; }
+        if (!olOpen) { out.push("<ol>"); olOpen = true; }
+        out.push(`<li>${ol[1]}</li>`);
+      } else {
+        if (ulOpen) { out.push("</ul>"); ulOpen = false; }
+        if (olOpen) { out.push("</ol>"); olOpen = false; }
+        out.push(line);
+      }
+    }
+    if (ulOpen) out.push("</ul>");
+    if (olOpen) out.push("</ol>");
+    s = out.join("\n");
+
+    // 10. Párrafos: separar por líneas en blanco
+    s = s.split(/\n{2,}/).map(block => {
+      block = block.trim();
+      if (!block) return "";
+      // No envolver bloques que ya son elementos HTML de bloque
+      if (/^<(h[1-6]|ul|ol|table|blockquote|pre|hr|div)[\s>]/.test(block)) return block;
+      // Saltos simples dentro del párrafo → <br>
+      return "<p>" + block.replace(/\n/g, "<br>") + "</p>";
+    }).join("\n");
+
+    // 11. Limpiar párrafos vacíos
+    s = s.replace(/<p>\s*<\/p>/g, "");
+
+    // 12. Restaurar bloques de código
+    s = s.replace(/\x00C(\d+)\x00/g, (_, i) => codeBlocks[+i]);
+
+    return s;
+  }
+
+  function esc(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function escAttr(str) {
+    return esc(str).replace(/'/g, "&#39;");
+  }
 
   // ── Init ──────────────────────────────────────────────────────────────────────
   async function init() {
@@ -188,7 +301,7 @@
     el.className = "conv-item" + (c.id === currentConvId ? " active" : "");
     el.dataset.id = c.id;
     el.innerHTML = `
-      <span class="conv-title" title="${esc(c.title)}">${esc(c.title)}</span>
+      <span class="conv-title" title="${escAttr(c.title)}">${esc(c.title)}</span>
       <span class="conv-actions">
         <button class="conv-btn" data-action="move"   title="Mover a proyecto">📁</button>
         <button class="conv-btn" data-action="export" title="Exportar XML">⬇</button>
@@ -273,7 +386,6 @@
     if (!msgs.length) { showEmptyState(); return; }
     messagesInner.innerHTML = "";
     msgs.forEach(m => appendMessage(m.role, m.content));
-    // Al cargar conversación histórica no mostramos ningún indicador
     scrollToBottom();
   }
 
@@ -306,65 +418,51 @@
     if (!stopBtn) return;
     stopBtn.style.display = "none";
     stopBtn.addEventListener("click", () => {
-      if (abortController) {
-        abortController.abort();
-        abortController = null;
-      }
+      abortController?.abort();
+      abortController = null;
     });
   }
 
   function setStreaming(val) {
-    isStreaming            = val;
-    sendBtn.style.display  = val ? "none" : "";
+    isStreaming             = val;
+    sendBtn.style.display   = val ? "none" : "";
     if (stopBtn) stopBtn.style.display = val ? "flex" : "none";
-    chatTextarea.disabled  = val;
+    chatTextarea.disabled   = val;
   }
 
-  // ── Indicador fin / botón continuar ──────────────────────────────────────────
+  // ── Indicadores de fin / corte ────────────────────────────────────────────────
 
-  // Llamado cuando [DONE] llega correctamente: muestra "✓ Completado" y desaparece
   function renderDoneIndicator() {
-    document.getElementById("continue-btn-wrap")?.remove();
+    document.getElementById("status-wrap")?.remove();
     const wrap = document.createElement("div");
-    wrap.id = "continue-btn-wrap";
+    wrap.id = "status-wrap";
     wrap.style.cssText = "display:flex;justify-content:center;padding:10px 0 4px;";
-    wrap.innerHTML = `
-      <span id="done-indicator" style="
-        font-size:.76rem;color:var(--text-secondary);
-        display:flex;align-items:center;gap:5px;opacity:1;
-        transition:opacity 1s ease;">
-        ✓ Respuesta completada
-      </span>`;
+    wrap.innerHTML = `<span style="font-size:.75rem;color:var(--text-secondary);opacity:1;transition:opacity 1s ease;">✓ Respuesta completada</span>`;
     messagesInner.appendChild(wrap);
-    // Desvanecer y eliminar tras 3 s
     setTimeout(() => {
-      const el = document.getElementById("done-indicator");
-      if (el) { el.style.opacity = "0"; setTimeout(() => wrap.remove(), 1000); }
+      const span = wrap.querySelector("span");
+      if (span) { span.style.opacity = "0"; setTimeout(() => wrap.remove(), 1000); }
     }, 3000);
   }
 
-  // Llamado cuando el stream se corta (timeout, error de red, abort manual):
-  // muestra botón para que el usuario retome cuando quiera
   function renderContinueBtn() {
-    document.getElementById("continue-btn-wrap")?.remove();
+    document.getElementById("status-wrap")?.remove();
     if (!currentConvId) return;
     if (!messagesInner.querySelector(".message.assistant")) return;
 
     const wrap = document.createElement("div");
-    wrap.id = "continue-btn-wrap";
+    wrap.id = "status-wrap";
     wrap.style.cssText = "display:flex;justify-content:center;padding:10px 0 4px;";
     wrap.innerHTML = `
       <button id="continue-btn" style="
         padding:6px 16px;background:transparent;
         border:1px solid var(--border);border-radius:20px;
         color:var(--text-secondary);font-family:var(--font-sans);
-        font-size:.78rem;cursor:pointer;transition:all 150ms ease;
-        display:flex;align-items:center;gap:5px;">
+        font-size:.78rem;cursor:pointer;transition:all 150ms ease;">
         ▶ Continuar respuesta
       </button>`;
     messagesInner.appendChild(wrap);
-
-    const btn = document.getElementById("continue-btn");
+    const btn = wrap.querySelector("#continue-btn");
     btn.addEventListener("mouseover", () => { btn.style.borderColor = "var(--accent)"; btn.style.color = "var(--accent)"; });
     btn.addEventListener("mouseout",  () => { btn.style.borderColor = "var(--border)";  btn.style.color = "var(--text-secondary)"; });
     btn.addEventListener("click", continueResponse);
@@ -372,7 +470,7 @@
 
   async function continueResponse() {
     if (isStreaming || !currentConvId) return;
-    document.getElementById("continue-btn-wrap")?.remove();
+    document.getElementById("status-wrap")?.remove();
     await doStream("Continúa exactamente donde te quedaste, sin repetir lo ya escrito.");
   }
 
@@ -390,7 +488,7 @@
     chatTextarea.value = "";
     resizeTextarea();
 
-    document.getElementById("continue-btn-wrap")?.remove();
+    document.getElementById("status-wrap")?.remove();
     if (window.clearAttachmentAfterSend) window.clearAttachmentAfterSend();
 
     messagesInner.querySelector(".empty-state")?.remove();
@@ -419,10 +517,8 @@
     let response;
     try {
       response = await fetch("/api/chat", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(body),
-        signal:  abortController.signal,
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: abortController.signal,
       });
     } catch (e) {
       thinkingEl.remove();
@@ -445,15 +541,16 @@
     let buffer          = "";
     let assistantBubble = null;
     let fullText        = "";
+    let tokenCount      = 0;
     let lastTokenTime   = Date.now();
 
-    // Watchdog: si no llegan tokens en 45 s, cortar limpiamente
+    // Watchdog: cortar si no llegan tokens en 45 s
     const watchdog = setInterval(() => {
       if (Date.now() - lastTokenTime > 45000 && isStreaming) {
         clearInterval(watchdog);
         abortController?.abort();
         setStreaming(false);
-        if (assistantBubble) assistantBubble.textContent = fullText;
+        if (assistantBubble) assistantBubble.innerHTML = md(fullText);
         renderContinueBtn();
       }
     }, 3000);
@@ -475,8 +572,8 @@
           if (raw === "[DONE]") {
             clearInterval(watchdog);
             setStreaming(false);
-            if (assistantBubble) setPlainText(assistantBubble, fullText);
-            renderDoneIndicator();   // ✓ terminó correctamente
+            if (assistantBubble) assistantBubble.innerHTML = md(fullText);
+            renderDoneIndicator();
             await loadConversations();
             return;
           }
@@ -491,8 +588,14 @@
               thinkingEl.remove();
               if (!assistantBubble) assistantBubble = appendMessageStreaming();
               fullText += obj.token;
-              // Durante el stream: texto plano directo, rápido
-              assistantBubble.textContent = fullText;
+              tokenCount++;
+              // Durante el stream: texto plano para no saturar el DOM con renders parciales
+              // Render markdown completo cada 80 tokens para ir mostrando el formato
+              if (tokenCount % 80 === 0) {
+                assistantBubble.innerHTML = md(fullText);
+              } else {
+                assistantBubble.textContent = fullText;
+              }
               scrollToBottom();
             }
             if (obj.error) {
@@ -507,30 +610,18 @@
         }
       }
     } catch (e) {
-      // Stream abortado por el usuario o por error de red
       if (e.name !== "AbortError") {
         if (!assistantBubble) { thinkingEl.remove(); appendError("La conexión se interrumpió."); }
       } else {
-        // Abortado manualmente: conservar lo recibido
         thinkingEl.remove();
       }
     }
 
     clearInterval(watchdog);
     setStreaming(false);
-    if (assistantBubble && fullText) setPlainText(assistantBubble, fullText);
+    if (assistantBubble && fullText) assistantBubble.innerHTML = md(fullText);
     renderContinueBtn();
     if (fullText) await loadConversations();
-  }
-
-  // Renderiza texto plano respetando saltos de línea (sin markdown)
-  function setPlainText(el, text) {
-    el.innerHTML = "";
-    const lines = text.split("\n");
-    lines.forEach((line, i) => {
-      el.appendChild(document.createTextNode(line));
-      if (i < lines.length - 1) el.appendChild(document.createElement("br"));
-    });
   }
 
   // ── Helpers de UI ─────────────────────────────────────────────────────────────
@@ -540,14 +631,11 @@
     el.className = `message ${role}`;
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
-
     if (role === "assistant") {
-      // Texto plano con saltos de línea
-      setPlainText(bubble, content);
+      bubble.innerHTML = md(content);
     } else {
       bubble.textContent = content;
     }
-
     el.innerHTML = `<div class="message-avatar">${role === "user" ? "Tú" : "AI"}</div>`;
     const body = document.createElement("div");
     body.className = "message-body";
@@ -606,12 +694,6 @@
 
   function scrollToBottom() {
     messagesArea.scrollTo({ top: messagesArea.scrollHeight, behavior: "smooth" });
-  }
-
-  function esc(str) {
-    return String(str)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
   function setupTextarea() {
