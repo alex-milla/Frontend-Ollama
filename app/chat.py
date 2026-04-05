@@ -1,7 +1,7 @@
 """
 Blueprint de chat con soporte de proyectos, habilidades, adjuntos y exportación.
-Sesión 5: imágenes enviadas a Ollama como imagen nativa en api_chat(),
-           sin OCR automático en el upload.
+Sesión 5 (v3): OCR de imágenes con Tesseract. El texto extraído se inyecta
+               en el mensaje como contexto, igual que PDF/DOCX.
 """
 import json
 import xml.etree.ElementTree as ET
@@ -35,8 +35,8 @@ def index():
 @bp.route("/api/models")
 @login_required
 def api_models():
-    host = _ollama_host()
-    raw  = ollama_client.list_models(host)
+    host  = _ollama_host()
+    raw   = ollama_client.list_models(host)
     names = [m.get("name", "") for m in raw if m.get("name")]
     return jsonify({"models": names})
 
@@ -74,10 +74,10 @@ def api_list_conversations():
 @bp.route("/api/conversations", methods=["POST"])
 @login_required
 def api_create_conversation():
-    data = request.get_json(silent=True) or {}
+    data       = request.get_json(silent=True) or {}
     model      = str(data.get("model", "")).strip()[:128]
     project_id = data.get("project_id")
-    db = get_db(current_app.config["DB_PATH"])
+    db      = get_db(current_app.config["DB_PATH"])
     conv_id = models.create_conversation(db, g.user["id"], model, project_id)
     conv    = models.get_conversation(db, conv_id, g.user["id"])
     db.close()
@@ -87,7 +87,7 @@ def api_create_conversation():
 @bp.route("/api/conversations/<int:conv_id>", methods=["GET"])
 @login_required
 def api_get_conversation(conv_id):
-    db = get_db(current_app.config["DB_PATH"])
+    db   = get_db(current_app.config["DB_PATH"])
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv is None:
         db.close()
@@ -100,7 +100,7 @@ def api_get_conversation(conv_id):
 @bp.route("/api/conversations/<int:conv_id>", methods=["DELETE"])
 @login_required
 def api_delete_conversation(conv_id):
-    db = get_db(current_app.config["DB_PATH"])
+    db      = get_db(current_app.config["DB_PATH"])
     deleted = models.delete_conversation(db, conv_id, g.user["id"])
     db.close()
     if not deleted:
@@ -113,7 +113,7 @@ def api_delete_conversation(conv_id):
 def api_move_conversation(conv_id):
     data       = request.get_json(silent=True) or {}
     project_id = data.get("project_id")
-    db = get_db(current_app.config["DB_PATH"])
+    db   = get_db(current_app.config["DB_PATH"])
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv is None:
         db.close()
@@ -132,7 +132,7 @@ def api_move_conversation(conv_id):
 @bp.route("/api/conversations/<int:conv_id>/export")
 @login_required
 def api_export_conversation(conv_id):
-    db = get_db(current_app.config["DB_PATH"])
+    db   = get_db(current_app.config["DB_PATH"])
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv is None:
         db.close()
@@ -140,17 +140,16 @@ def api_export_conversation(conv_id):
     msgs = models.list_messages(db, conv_id)
     db.close()
 
-    root       = ET.Element("conversation")
-    meta       = ET.SubElement(root, "metadata")
+    root = ET.Element("conversation")
+    meta = ET.SubElement(root, "metadata")
     ET.SubElement(meta, "title").text          = conv["title"]
     ET.SubElement(meta, "model").text          = conv["model"]
     ET.SubElement(meta, "created").text        = conv["created_at"]
     ET.SubElement(meta, "messages_count").text = str(len(msgs))
-
     messages_el = ET.SubElement(root, "messages")
     for m in msgs:
         msg_el = ET.SubElement(messages_el, "message")
-        msg_el.set("role",      m["role"])
+        msg_el.set("role", m["role"])
         msg_el.set("timestamp", m["created_at"])
         msg_el.text = m["content"]
 
@@ -163,21 +162,15 @@ def api_export_conversation(conv_id):
     )
 
 
-# ── Chat con soporte de imagen nativa ─────────────────────────────────────────
-
 @bp.route("/api/chat", methods=["POST"])
 @login_required
 def api_chat():
-    from . import file_processor as fp
-
     data       = request.get_json(silent=True) or {}
     conv_id    = data.get("conversation_id")
     model      = str(data.get("model", "")).strip()[:128]
     content    = str(data.get("message", "")).strip()
     project_id = data.get("project_id")
     skill_ids  = data.get("skill_ids", [])
-    # attachment_id opcional — si viene, adjuntamos la imagen al mensaje
-    attachment_id = data.get("attachment_id")
 
     if not content or not model:
         return jsonify({"error": "Faltan campos requeridos"}), 400
@@ -202,22 +195,6 @@ def api_chat():
 
     history     = models.list_messages(db, conv_id)
     ollama_msgs = [{"role": m["role"], "content": m["content"]} for m in history]
-
-    # Si hay imagen adjunta, añadirla al último mensaje (el del usuario)
-    image_b64 = None
-    if attachment_id:
-        att = models.get_attachment(db, attachment_id)
-        if att and att["chunk_unit"] == "block":
-            # chunk_unit "block" se usa para imágenes en este flujo
-            b64 = fp.read_image_base64(att["extracted_text_path"])
-            if b64:
-                image_b64 = b64
-
-    if image_b64 and ollama_msgs:
-        # El último mensaje es el del usuario — añadimos la imagen
-        last = ollama_msgs[-1].copy()
-        last["images"] = [image_b64]
-        ollama_msgs[-1] = last
 
     system_prompt = ""
     if skill_ids:
@@ -313,14 +290,15 @@ def api_upload():
     if file_type is None:
         return jsonify({"error": f"Tipo de archivo no soportado: {original_name}"}), 415
 
-    # Para imágenes: validar que el modelo activo sea de visión
-    if file_type == "image" and model and not fp.is_vision_model(model):
+    # Para imágenes: verificar que Tesseract está disponible
+    if file_type == "image" and not fp.tesseract_available():
         return jsonify({
             "error": (
-                f"El modelo '{model}' no soporta imágenes. "
-                "Selecciona llava, moondream o llama3.2-vision."
+                "Tesseract OCR no está instalado en el servidor. "
+                "Ejecuta: apt-get install tesseract-ocr tesseract-ocr-spa "
+                "&& pip install pytesseract pillow --break-system-packages"
             )
-        }), 400
+        }), 503
 
     db = get_db(current_app.config["DB_PATH"])
     if not conv_id:
@@ -331,13 +309,11 @@ def api_upload():
         db.close()
         return jsonify({"error": "Conversación no encontrada"}), 404
 
-    host = models.get_setting(db, "ollama_host") or current_app.config["OLLAMA_HOST"]
-
     try:
         chunks = fp.extract_text(file_bytes, file_type)
     except Exception as exc:
         db.close()
-        return jsonify({"error": f"Error procesando archivo: {exc}"}), 422
+        return jsonify({"error": str(exc)}), 422
 
     chunk_unit  = fp.chunk_unit_for(file_type)
     chunk_count = len(chunks)
@@ -354,7 +330,10 @@ def api_upload():
     )
     db.close()
 
-    preview_chunk = chunks[0][:2000] if chunks and file_type != "image" else ""
+    # Para imágenes: preview del texto OCR (primeros 300 chars)
+    preview_chunk = ""
+    if chunks:
+        preview_chunk = chunks[0][:300] if file_type == "image" else chunks[0][:2000]
 
     return jsonify({
         "attachment_id":   att_id,

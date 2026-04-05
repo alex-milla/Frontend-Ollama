@@ -1,8 +1,7 @@
 """
 file_processor.py — Extracción de texto y chunking por tipo de archivo.
-Sesión 5: imágenes soportadas como adjunto nativo (base64).
-           El modelo las procesa directamente al enviar el mensaje,
-           sin OCR automático en el momento del upload.
+Sesión 5 (v3): OCR de imágenes con Tesseract (pytesseract).
+               Tesseract es preciso para texto impreso, capturas y documentos.
 """
 import io
 import csv
@@ -76,6 +75,16 @@ def is_vision_model(model_name: str) -> bool:
     return any(hint in name_lower for hint in VISION_MODEL_HINTS)
 
 
+def tesseract_available() -> bool:
+    """Comprueba si pytesseract y Tesseract están instalados."""
+    try:
+        import pytesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
 def extract_text(file_bytes: bytes, file_type: str,
                  ollama_host: str = "", model: str = "") -> list[str]:
     if file_type == "pdf":
@@ -89,10 +98,84 @@ def extract_text(file_bytes: bytes, file_type: str,
     elif file_type == "xlsx":
         return _extract_xlsx(file_bytes)
     elif file_type == "image":
-        # Guardar base64; api_chat lo enviará a Ollama como imagen nativa
-        return [base64.b64encode(file_bytes).decode("utf-8")]
+        return _extract_image_tesseract(file_bytes)
     raise ValueError(f"Tipo de archivo no soportado: {file_type}")
 
+
+# ── OCR con Tesseract ─────────────────────────────────────────────────────────
+
+def _extract_image_tesseract(data: bytes) -> list[str]:
+    """
+    Extrae texto de una imagen usando Tesseract OCR.
+    Detecta automáticamente si el texto es español o inglés.
+    Devuelve lista de un único chunk con el texto extraído.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        raise ValueError(
+            "Tesseract no está instalado. Ejecuta: "
+            "apt-get install tesseract-ocr tesseract-ocr-spa && "
+            "pip install pytesseract pillow --break-system-packages"
+        )
+
+    try:
+        image = Image.open(io.BytesIO(data))
+
+        # Convertir a RGB si es necesario (PNG con transparencia, etc.)
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+
+        # Intentar con español + inglés primero (cubre la mayoría de casos)
+        # Si falla el idioma spa, caer a eng solo
+        langs = _available_tesseract_langs()
+        if "spa" in langs and "eng" in langs:
+            lang = "spa+eng"
+        elif "spa" in langs:
+            lang = "spa"
+        else:
+            lang = "eng"
+
+        # Configuración optimizada para capturas de pantalla y documentos
+        # PSM 6: asume bloque de texto uniforme (mejor para capturas)
+        # PSM 3: detección automática (mejor para documentos con layout)
+        # Probamos PSM 6 primero, si el resultado es corto probamos PSM 3
+        config_6 = "--psm 6 --oem 3"
+        config_3 = "--psm 3 --oem 3"
+
+        text_6 = pytesseract.image_to_string(image, lang=lang, config=config_6).strip()
+        text_3 = pytesseract.image_to_string(image, lang=lang, config=config_3).strip()
+
+        # Usar el resultado más largo (más texto extraído = mejor)
+        text = text_6 if len(text_6) >= len(text_3) else text_3
+
+        if not text:
+            raise ValueError(
+                "Tesseract no encontró texto en la imagen. "
+                "Comprueba que la imagen tiene buena resolución y el texto es legible."
+            )
+
+        log.info("Tesseract OCR: %d caracteres extraídos (lang=%s)", len(text), lang)
+        return [text]
+
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Error procesando imagen con Tesseract: {exc}") from exc
+
+
+def _available_tesseract_langs() -> set[str]:
+    """Devuelve los idiomas instalados en Tesseract."""
+    try:
+        import pytesseract
+        langs = pytesseract.get_languages(config="")
+        return set(langs)
+    except Exception:
+        return {"eng"}
+
+
+# ── PDF ───────────────────────────────────────────────────────────────────────
 
 def _chunk_text(text: str, size: int) -> list[str]:
     return [text[i:i + size] for i in range(0, max(1, len(text)), size)]
@@ -190,6 +273,8 @@ def _extract_xlsx(data: bytes) -> list[str]:
     return chunks or [""]
 
 
+# ── Metadatos de chunking ─────────────────────────────────────────────────────
+
 def chunk_unit_for(file_type: str) -> str:
     return {"pdf": "page", "csv": "row", "xlsx": "row"}.get(file_type, "block")
 
@@ -199,6 +284,8 @@ def is_long(chunks: list[str], file_type: str) -> bool:
         return False
     return len(chunks) > 1
 
+
+# ── Guardado en disco ─────────────────────────────────────────────────────────
 
 def save_upload(file_bytes: bytes, file_type: str, conv_id: int,
                 upload_folder: str,
@@ -243,7 +330,7 @@ def get_chunk_range(extracted_text_path: str, from_idx: int,
 
 
 def read_image_base64(extracted_text_path: str) -> str | None:
-    """Lee el base64 guardado para una imagen adjunta."""
+    """Lee el base64 guardado para una imagen adjunta (no usado con Tesseract)."""
     txt_path = Path(extracted_text_path)
     if not txt_path.exists():
         return None
