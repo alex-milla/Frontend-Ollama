@@ -82,7 +82,19 @@
     if (convId) fd.append("conversation_id", String(convId));
 
     try {
-      const res  = await fetch("/api/upload", { method: "POST", body: fd });
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+
+      if (res.status === 413) {
+        const limitMB = 50;
+        const fileMB  = (file.size / 1048576).toFixed(1);
+        showAttachPanel({
+          error: `El archivo pesa ${fileMB} MB y supera el límite de ${limitMB} MB.`,
+          original_name: file.name,
+          size_bytes: file.size
+        });
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         showAttachPanel({ error: data.error || "Error subiendo archivo", original_name: file.name, size_bytes: file.size });

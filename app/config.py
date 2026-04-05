@@ -41,4 +41,4 @@ class Config:
         str(BASE_DIR / "data" / "outputs"),
     )
 
-    MAX_CONTENT_LENGTH: int = int(os.environ.get("MAX_CONTENT_LENGTH", 10 * 1024 * 1024))
+    MAX_CONTENT_LENGTH: int = int(os.environ.get("MAX_CONTENT_LENGTH", 50 * 1024 * 1024))
