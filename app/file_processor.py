@@ -2,8 +2,8 @@
 file_processor.py — Extracción de texto y chunking por tipo de archivo.
 
 Criterios de "archivo largo" (requiere selector de rango):
-  - PDF:       > 20 páginas  O  texto total > 50 000 caracteres
-  - DOCX/TXT:  texto total > 50 000 caracteres
+  - PDF:       > 60 páginas  O  texto total > 150 000 caracteres
+  - DOCX/TXT:  texto total > 150 000 caracteres
   - CSV/XLSX:  > 500 filas de datos
 """
 import io
@@ -14,14 +14,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-TEXT_LONG_CHARS  = 50_000
-PDF_LONG_PAGES   = 20
+TEXT_LONG_CHARS  = 150_000
+PDF_LONG_PAGES   = 60
 TABLE_LONG_ROWS  = 500
 
 CHUNK_SIZES = {
     "block": 10_000,
     "row":   100,
-    "page":  10,
+    "page":  60,
 }
 
 ALLOWED_EXTENSIONS = {
