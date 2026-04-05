@@ -1,5 +1,5 @@
 /**
- * chat.js — Chat con soporte de proyectos y habilidades.
+ * chat.js — Chat con soporte de proyectos, habilidades y adjuntos.
  */
 (function () {
   "use strict";
@@ -26,6 +26,17 @@
   const skillsPanel     = document.getElementById("skills-panel");
   const skillsChips     = document.getElementById("skills-chips");
   const projectBadge    = document.getElementById("project-badge");
+
+  // ── API pública para attachments.js ─────────────────────────────────────────
+
+  window.getCurrentConvId    = () => currentConvId;
+  window.getCurrentProjectId = () => currentProject ? currentProject.id : null;
+  window.setCurrentConvId    = (id) => {
+    currentConvId = id;
+    setActiveConv(id);
+  };
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
 
   async function init() {
     await loadModels();
@@ -101,6 +112,7 @@
       currentProject = null;
       skillsPanel.style.display = "none";
       projectBadge.style.display = "none";
+      updateSaveBtn();
       await loadConversations();
       return;
     }
@@ -129,8 +141,15 @@
           skillsChips.appendChild(chip);
         });
       }
+      updateSaveBtn();
       await loadConversations();
     } catch { }
+  }
+
+  function updateSaveBtn() {
+    const saveBtn = document.getElementById("export-save-btn");
+    if (!saveBtn) return;
+    saveBtn.style.display = currentProject ? "" : "none";
   }
 
   function toggleSkillChip(chip, skillId) {
@@ -306,18 +325,26 @@
   }
 
   async function sendMessage() {
-    const content = chatTextarea.value.trim();
+    let content = chatTextarea.value.trim();
     const model   = modelSelect.value;
     if (!content || !model || isStreaming) return;
+
+    // Inyectar contexto del adjunto si existe
+    const attachCtx = window.getAttachmentContext ? window.getAttachmentContext() : null;
+    if (attachCtx) {
+      content = content + attachCtx;
+    }
 
     const emptyState = messagesInner.querySelector(".empty-state");
     if (emptyState) emptyState.remove();
 
+    // Solo mostrar al usuario el texto original (sin el contexto del adjunto)
+    const displayContent = chatTextarea.value.trim();
     chatTextarea.value = "";
     resizeTextarea();
     setStreaming(true);
 
-    appendMessage("user", content);
+    appendMessage("user", displayContent);
     const thinkingEl = appendThinking();
     scrollToBottom();
 
@@ -337,6 +364,9 @@
       setStreaming(false);
       return;
     }
+
+    // Limpiar adjunto de un solo uso después del envío
+    if (window.clearAttachmentAfterSend) window.clearAttachmentAfterSend();
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

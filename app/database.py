@@ -78,6 +78,31 @@ CREATE TABLE IF NOT EXISTS project_skills (
     PRIMARY KEY (project_id, skill_id)
 );
 
+CREATE TABLE IF NOT EXISTS conversation_attachments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id     INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    filename_stored     TEXT    NOT NULL,
+    original_name       TEXT    NOT NULL,
+    mime_type           TEXT    NOT NULL,
+    size_bytes          INTEGER NOT NULL,
+    chunk_unit          TEXT    NOT NULL DEFAULT 'page',
+    chunk_count         INTEGER NOT NULL DEFAULT 1,
+    extracted_text_path TEXT    NOT NULL,
+    created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_outputs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id          INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    conversation_id     INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+    filename_stored     TEXT    NOT NULL,
+    display_name        TEXT    NOT NULL,
+    format              TEXT    NOT NULL,
+    template            TEXT    NOT NULL DEFAULT 'libre',
+    size_bytes          INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_conversations_user
     ON conversations(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_project
@@ -88,18 +113,16 @@ CREATE INDEX IF NOT EXISTS idx_projects_user
     ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_skills_user
     ON skills(user_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_conv
+    ON conversation_attachments(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_outputs_project
+    ON project_outputs(project_id);
 """
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """
-    Migraciones incrementales para instalaciones existentes.
-    Solo se ejecutan si las tablas ya existen (instalación previa).
-    En instalaciones limpias, el schema completo se aplica via executescript.
-    """
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
-    # Crear tabla projects si falta (instalación pre-proyectos)
     if "conversations" in tables and "projects" not in tables:
         log.info("Migración: creando tabla projects")
         conn.execute("""
@@ -113,7 +136,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         """)
 
-    # Añadir project_id a conversations si la tabla ya existe pero le falta la columna
     if "conversations" in tables:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
         if "project_id" not in cols:
@@ -122,7 +144,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 "ALTER TABLE conversations ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL"
             )
 
-    # Crear tabla skills si falta
     if "conversations" in tables and "skills" not in tables:
         log.info("Migración: creando tabla skills")
         conn.execute("""
@@ -137,7 +158,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         """)
 
-    # Crear tabla project_skills si falta
     if "conversations" in tables and "project_skills" not in tables:
         log.info("Migración: creando tabla project_skills")
         conn.execute("""
@@ -148,6 +168,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 PRIMARY KEY (project_id, skill_id)
             )
         """)
+
+    # Sesión 4: conversation_attachments
+    if "conversations" in tables and "conversation_attachments" not in tables:
+        log.info("Migración: creando tabla conversation_attachments")
+        conn.execute("""
+            CREATE TABLE conversation_attachments (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id     INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                filename_stored     TEXT    NOT NULL,
+                original_name       TEXT    NOT NULL,
+                mime_type           TEXT    NOT NULL,
+                size_bytes          INTEGER NOT NULL,
+                chunk_unit          TEXT    NOT NULL DEFAULT 'page',
+                chunk_count         INTEGER NOT NULL DEFAULT 1,
+                extracted_text_path TEXT    NOT NULL,
+                created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_conv ON conversation_attachments(conversation_id)")
+
+    # Sesión 4: project_outputs
+    if "projects" in tables and "project_outputs" not in tables:
+        log.info("Migración: creando tabla project_outputs")
+        conn.execute("""
+            CREATE TABLE project_outputs (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id          INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                conversation_id     INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+                filename_stored     TEXT    NOT NULL,
+                display_name        TEXT    NOT NULL,
+                format              TEXT    NOT NULL,
+                template            TEXT    NOT NULL DEFAULT 'libre',
+                size_bytes          INTEGER NOT NULL DEFAULT 0,
+                created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_project ON project_outputs(project_id)")
 
     conn.commit()
 

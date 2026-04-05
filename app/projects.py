@@ -1,5 +1,5 @@
 """
-Blueprint de proyectos y habilidades.
+Blueprint de proyectos, habilidades y outputs.
 """
 from flask import Blueprint, g, jsonify, request, render_template, current_app
 from .auth import login_required
@@ -119,6 +119,19 @@ def api_project_system_prompt(project_id):
     prompt = models.get_project_system_prompt(db, project_id)
     db.close()
     return jsonify({"system_prompt": prompt})
+
+
+@bp.route("/api/projects/<int:project_id>/outputs", methods=["GET"])
+@login_required
+def api_project_outputs(project_id):
+    db = get_db(current_app.config["DB_PATH"])
+    project = models.get_project(db, project_id, g.user["id"])
+    if project is None:
+        db.close()
+        return jsonify({"error": "No encontrado"}), 404
+    outputs = models.list_outputs(db, project_id)
+    db.close()
+    return jsonify([dict(o) for o in outputs])
 
 
 @bp.route("/api/skills", methods=["GET"])

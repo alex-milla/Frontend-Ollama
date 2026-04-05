@@ -1,5 +1,5 @@
 /**
- * projects.js — Gestión de proyectos y habilidades.
+ * projects.js — Gestión de proyectos, habilidades y archivos generados.
  */
 (function () {
   "use strict";
@@ -23,7 +23,7 @@
         btn.classList.add("active");
         const tab = btn.dataset.tab;
         document.getElementById("tab-projects").style.display = tab === "projects" ? "" : "none";
-        document.getElementById("tab-skills").style.display = tab === "skills" ? "" : "none";
+        document.getElementById("tab-skills").style.display   = tab === "skills"   ? "" : "none";
       });
     });
   }
@@ -56,17 +56,95 @@
         </div>
         <button class="conv-btn" title="Editar" data-edit="${p.id}">✎</button>
       </div>
-      <div style="margin-top:12px;display:flex;gap:8px;">
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
         <a href="/?project_id=${p.id}" class="btn-sm" style="text-decoration:none;text-align:center;flex:1;">💬 Chatear</a>
+        <button class="btn-sm" data-outputs="${p.id}" data-name="${esc(p.name)}" style="flex:1;">📄 Archivos</button>
       </div>`;
     card.querySelector("[data-edit]").addEventListener("click", e => {
       e.stopPropagation();
       openProjectModal(p.id);
     });
+    card.querySelector("[data-outputs]").addEventListener("click", e => {
+      e.stopPropagation();
+      loadOutputs(p.id, p.name);
+    });
     card.addEventListener("mouseenter", () => card.style.boxShadow = "var(--shadow-md)");
     card.addEventListener("mouseleave", () => card.style.boxShadow = "");
     return card;
   }
+
+  // ── Outputs ────────────────────────────────────────────────────────────────
+
+  async function loadOutputs(projectId, projectName) {
+    const section  = document.getElementById("outputs-section");
+    const listEl   = document.getElementById("outputs-list");
+    const nameEl   = document.getElementById("outputs-project-name");
+
+    section.style.display = "";
+    nameEl.textContent = projectName;
+    listEl.innerHTML = '<p style="color:var(--text-secondary);font-size:.87rem;">Cargando…</p>';
+
+    // Scroll suave a la sección
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    try {
+      const res = await fetch(`/projects/api/projects/${projectId}/outputs`);
+      const outputs = await res.json();
+
+      if (!outputs.length) {
+        listEl.innerHTML = '<p style="color:var(--text-secondary);font-size:.87rem;">Sin archivos generados aún.</p>';
+        return;
+      }
+
+      const table = document.createElement("table");
+      table.className = "outputs-table";
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>Archivo</th>
+            <th>Formato</th>
+            <th>Plantilla</th>
+            <th>Tamaño</th>
+            <th>Fecha</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>`;
+      const tbody = document.createElement("tbody");
+
+      outputs.forEach(o => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(o.display_name)}">${esc(o.display_name)}</td>
+          <td><span class="format-badge ${esc(o.format)}">${esc(o.format.toUpperCase())}</span></td>
+          <td style="color:var(--text-secondary);font-size:.82rem;">${esc(o.template || "libre")}</td>
+          <td style="color:var(--text-secondary);font-size:.82rem;">${formatBytes(o.size_bytes)}</td>
+          <td style="color:var(--text-secondary);font-size:.82rem;">${formatDate(o.created_at)}</td>
+          <td>
+            <div class="table-actions">
+              <a class="btn-sm" href="/api/outputs/${o.id}/download" title="Descargar">⬇ Descargar</a>
+              <button class="btn-sm danger" data-delete-output="${o.id}">🗑 Eliminar</button>
+            </div>
+          </td>`;
+        tr.querySelector("[data-delete-output]").addEventListener("click", async () => {
+          if (!confirm(`¿Eliminar "${o.display_name}"?`)) return;
+          const r = await fetch(`/api/outputs/${o.id}`, { method: "DELETE" });
+          if (r.ok) {
+            await loadOutputs(projectId, projectName);
+            showToast("Archivo eliminado.");
+          }
+        });
+        tbody.appendChild(tr);
+      });
+
+      table.appendChild(tbody);
+      listEl.innerHTML = "";
+      listEl.appendChild(table);
+    } catch {
+      listEl.innerHTML = '<p style="color:#c62828">Error cargando archivos.</p>';
+    }
+  }
+
+  // ── Crear proyecto ──────────────────────────────────────────────────────────
 
   function setupCreateProject() {
     document.getElementById("btn-create-project").addEventListener("click", async () => {
@@ -166,9 +244,12 @@
     if (!confirm("¿Eliminar este proyecto y todas sus conversaciones?")) return;
     await fetch(`/projects/api/projects/${id}`, { method: "DELETE" });
     closeModal("modal-project");
+    document.getElementById("outputs-section").style.display = "none";
     await loadProjects();
     showToast("Proyecto eliminado.");
   }
+
+  // ── Habilidades ────────────────────────────────────────────────────────────
 
   async function loadSkills() {
     const list = document.getElementById("skills-list");
@@ -264,10 +345,24 @@
     showToast("Habilidad eliminada.");
   }
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
   function closeModal(id) { document.getElementById(id).style.display = "none"; }
 
   function esc(str) {
     return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return "–";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  function formatDate(iso) {
+    if (!iso) return "–";
+    return new Date(iso).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
   }
 
   let toastT;

@@ -40,6 +40,20 @@
         <div id="project-error" class="error-msg" style="display:none;margin-top:8px;"></div>
       </div>
     </section>
+
+    <!-- Sección archivos generados — se rellena dinámicamente al abrir un proyecto -->
+    <section class="admin-section" id="outputs-section" style="display:none;">
+      <h2 class="section-title">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        Archivos generados · <span id="outputs-project-name" style="font-weight:400;color:var(--text-secondary)"></span>
+      </h2>
+      <div id="outputs-list">
+        <p style="color:var(--text-secondary);font-size:.87rem;">Sin archivos generados aún.</p>
+      </div>
+    </section>
   </div>
 
   <div id="tab-skills" style="display:none;">

@@ -96,13 +96,74 @@
           <p>Selecciona un modelo y escribe tu primer mensaje.</p>
         </div>
       </div>
+
+      <!-- Panel de exportar — visible cuando hay mensajes del asistente -->
+      <div id="export-panel" class="export-panel" style="display:none;">
+        <div class="export-panel-title">
+          💾 Guardar / exportar resultado
+        </div>
+        <div class="export-controls">
+          <div class="export-control">
+            <label for="export-format">Formato</label>
+            <select id="export-format" class="export-select">
+              <option value="txt">TXT</option>
+              <option value="md">Markdown</option>
+              <option value="docx">DOCX</option>
+              <option value="pdf">PDF</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+          <div class="export-control">
+            <label for="export-template">Plantilla</label>
+            <select id="export-template" class="export-select">
+              <option value="libre">Texto libre</option>
+            </select>
+          </div>
+          <div class="export-control">
+            <label for="export-filename">Nombre del archivo</label>
+            <input id="export-filename" class="export-input" type="text" placeholder="mi_documento" maxlength="128">
+          </div>
+        </div>
+        <div class="export-actions">
+          <button id="export-download-btn" class="export-btn primary">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Descargar ahora
+          </button>
+          <button id="export-save-btn" class="export-btn secondary" style="display:none;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            Guardar en proyecto
+          </button>
+        </div>
+        <div id="export-result" class="export-result"></div>
+      </div>
     </div>
 
     <div class="input-area">
       <div class="input-inner">
+        <!-- Panel del adjunto (aparece encima del textarea) -->
+        <div id="attach-panel-wrap" style="display:none;margin-bottom:8px;"></div>
+
+        <!-- Input file oculto -->
+        <input type="file" id="attach-file-input" style="display:none;"
+          accept=".pdf,.docx,.txt,.md,.py,.js,.json,.csv,.xlsx">
+
         <textarea class="chat-textarea" id="chat-textarea"
           placeholder="Escribe un mensaje… (Enter para enviar, Shift+Enter para nueva línea)"
           rows="1" aria-label="Mensaje"></textarea>
+
+        <!-- Botón adjuntar -->
+        <button class="attach-btn" id="attach-btn" title="Adjuntar archivo" aria-label="Adjuntar archivo">
+          📎
+        </button>
+
         <button class="send-btn" id="send-btn" title="Enviar">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="22" y1="2" x2="11" y2="13"/>
@@ -118,4 +179,5 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/attachments.js') }}"></script>
 {% endblock %}

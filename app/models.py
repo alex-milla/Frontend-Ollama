@@ -204,9 +204,84 @@ def set_project_skills(conn, project_id, skill_ids):
     conn.commit()
 
 def get_project_system_prompt(conn, project_id):
-    """Concatena el contenido MD de todas las habilidades del proyecto."""
     skills = get_project_skills(conn, project_id)
     if not skills:
         return ""
     parts = [f"## {s['name']}\n\n{s['content']}" for s in skills]
     return "\n\n---\n\n".join(parts)
+
+
+# ── Adjuntos (conversation_attachments) ──────────────────────────────────────
+
+def create_attachment(conn, conversation_id, filename_stored, original_name,
+                      mime_type, size_bytes, chunk_unit, chunk_count, extracted_text_path):
+    cur = conn.execute(
+        """INSERT INTO conversation_attachments
+           (conversation_id, filename_stored, original_name, mime_type,
+            size_bytes, chunk_unit, chunk_count, extracted_text_path)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (conversation_id, filename_stored, original_name, mime_type,
+         size_bytes, chunk_unit, chunk_count, extracted_text_path)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def get_attachment(conn, attachment_id):
+    return conn.execute(
+        "SELECT * FROM conversation_attachments WHERE id=?",
+        (attachment_id,)
+    ).fetchone()
+
+def get_attachment_by_conv(conn, attachment_id, conversation_id):
+    return conn.execute(
+        "SELECT * FROM conversation_attachments WHERE id=? AND conversation_id=?",
+        (attachment_id, conversation_id)
+    ).fetchone()
+
+def list_attachments(conn, conversation_id):
+    return conn.execute(
+        "SELECT * FROM conversation_attachments WHERE conversation_id=? ORDER BY created_at ASC",
+        (conversation_id,)
+    ).fetchall()
+
+def delete_attachment(conn, attachment_id):
+    conn.execute("DELETE FROM conversation_attachments WHERE id=?", (attachment_id,))
+    conn.commit()
+
+
+# ── Outputs de proyecto (project_outputs) ────────────────────────────────────
+
+def create_output(conn, project_id, conversation_id, filename_stored,
+                  display_name, fmt, template, size_bytes):
+    cur = conn.execute(
+        """INSERT INTO project_outputs
+           (project_id, conversation_id, filename_stored, display_name,
+            format, template, size_bytes)
+           VALUES (?,?,?,?,?,?,?)""",
+        (project_id, conversation_id, filename_stored, display_name,
+         fmt, template, size_bytes)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def get_output(conn, output_id):
+    return conn.execute(
+        "SELECT * FROM project_outputs WHERE id=?",
+        (output_id,)
+    ).fetchone()
+
+def get_output_by_project(conn, output_id, project_id):
+    return conn.execute(
+        "SELECT * FROM project_outputs WHERE id=? AND project_id=?",
+        (output_id, project_id)
+    ).fetchone()
+
+def list_outputs(conn, project_id):
+    return conn.execute(
+        "SELECT * FROM project_outputs WHERE project_id=? ORDER BY created_at DESC",
+        (project_id,)
+    ).fetchall()
+
+def delete_output(conn, output_id):
+    conn.execute("DELETE FROM project_outputs WHERE id=?", (output_id,))
+    conn.commit()

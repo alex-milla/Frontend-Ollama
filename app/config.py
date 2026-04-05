@@ -35,4 +35,10 @@ class Config:
         "UPLOAD_FOLDER",
         str(BASE_DIR / "data" / "uploads"),
     )
+
+    OUTPUT_FOLDER: str = os.environ.get(
+        "OUTPUT_FOLDER",
+        str(BASE_DIR / "data" / "outputs"),
+    )
+
     MAX_CONTENT_LENGTH: int = int(os.environ.get("MAX_CONTENT_LENGTH", 10 * 1024 * 1024))
