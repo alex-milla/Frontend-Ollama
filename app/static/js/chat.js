@@ -1,44 +1,62 @@
 /**
- * chat.js — Chat con soporte de proyectos, habilidades y adjuntos.
+ * chat.js — Chat con soporte de proyectos, habilidades, adjuntos y exportación.
+ * v4.2: markdown renderizado con marked.js + botón "Continuar" para respuestas cortadas.
  */
 (function () {
   "use strict";
 
-  let currentConvId  = null;
-  let isStreaming    = false;
-  let currentProject = null;
-  let activeSkillIds = [];
-  let allProjects    = [];
+  // ── Estado ────────────────────────────────────────────────────────────────────
+  let currentConvId   = null;
+  let isStreaming     = false;
+  let currentProject  = null;
+  let activeSkillIds  = [];
+  let allProjects     = [];
+  let lastAssistantBubble = null; // referencia al último bubble del asistente
 
-  const messagesArea    = document.getElementById("messages-area");
-  const messagesInner   = document.getElementById("messages-inner");
-  const chatTextarea    = document.getElementById("chat-textarea");
-  const sendBtn         = document.getElementById("send-btn");
-  const modelSelect     = document.getElementById("model-select");
-  const statusDot       = document.getElementById("status-dot");
-  const statusText      = document.getElementById("status-text");
-  const convList        = document.getElementById("conv-list");
-  const newChatBtn      = document.getElementById("btn-new-chat");
-  const sidebarToggle   = document.getElementById("btn-sidebar-toggle");
-  const sidebar         = document.getElementById("sidebar");
-  const sidebarOverlay  = document.getElementById("sidebar-overlay");
-  const projectSelect   = document.getElementById("project-select");
-  const skillsPanel     = document.getElementById("skills-panel");
-  const skillsChips     = document.getElementById("skills-chips");
-  const projectBadge    = document.getElementById("project-badge");
+  // ── DOM refs ──────────────────────────────────────────────────────────────────
+  const messagesArea   = document.getElementById("messages-area");
+  const messagesInner  = document.getElementById("messages-inner");
+  const chatTextarea   = document.getElementById("chat-textarea");
+  const sendBtn        = document.getElementById("send-btn");
+  const modelSelect    = document.getElementById("model-select");
+  const statusDot      = document.getElementById("status-dot");
+  const statusText     = document.getElementById("status-text");
+  const convList       = document.getElementById("conv-list");
+  const newChatBtn     = document.getElementById("btn-new-chat");
+  const sidebarToggle  = document.getElementById("btn-sidebar-toggle");
+  const sidebar        = document.getElementById("sidebar");
+  const sidebarOverlay = document.getElementById("sidebar-overlay");
+  const projectSelect  = document.getElementById("project-select");
+  const skillsPanel    = document.getElementById("skills-panel");
+  const skillsChips    = document.getElementById("skills-chips");
+  const projectBadge   = document.getElementById("project-badge");
 
-  // ── API pública para attachments.js ─────────────────────────────────────────
-
+  // ── API pública para attachments.js ──────────────────────────────────────────
   window.getCurrentConvId    = () => currentConvId;
   window.getCurrentProjectId = () => currentProject ? currentProject.id : null;
-  window.setCurrentConvId    = (id) => {
-    currentConvId = id;
-    setActiveConv(id);
-  };
+  window.setCurrentConvId    = (id) => { currentConvId = id; setActiveConv(id); };
 
-  // ── Init ─────────────────────────────────────────────────────────────────────
+  // ── marked.js config ─────────────────────────────────────────────────────────
+  function setupMarked() {
+    if (typeof marked === "undefined") return;
+    marked.setOptions({
+      breaks: true,       // saltos de línea simples → <br>
+      gfm: true,          // GitHub Flavored Markdown
+      sanitize: false,    // confiamos en el contenido del modelo local
+    });
+  }
 
+  function renderMarkdown(text) {
+    if (typeof marked !== "undefined") {
+      try { return marked.parse(text); } catch (e) { /* fallback */ }
+    }
+    // Fallback minimalista si marked no carga
+    return "<p>" + esc(text).replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>") + "</p>";
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────────
   async function init() {
+    setupMarked();
     await loadModels();
     await checkOllamaStatus();
     await loadProjects();
@@ -49,18 +67,14 @@
     const pid = params.get("project_id");
     if (pid) {
       const opt = projectSelect.querySelector(`option[value="${pid}"]`);
-      if (opt) {
-        projectSelect.value = pid;
-        await onProjectChange();
-        return;
-      }
+      if (opt) { projectSelect.value = pid; await onProjectChange(); return; }
     }
     await loadConversations();
   }
 
   async function loadModels() {
     try {
-      const res = await fetch("/api/models");
+      const res  = await fetch("/api/models");
       const data = await res.json();
       modelSelect.innerHTML = "";
       (data.models || []).forEach(m => {
@@ -68,7 +82,7 @@
         opt.value = m; opt.textContent = m;
         modelSelect.appendChild(opt);
       });
-      if (!data.models || !data.models.length)
+      if (!data.models?.length)
         modelSelect.innerHTML = '<option value="">Sin modelos disponibles</option>';
     } catch {
       modelSelect.innerHTML = '<option value="">Error cargando modelos</option>';
@@ -77,14 +91,14 @@
 
   async function checkOllamaStatus() {
     try {
-      const res = await fetch("/api/ollama/status");
+      const res  = await fetch("/api/ollama/status");
       const data = await res.json();
-      statusDot.className = "status-dot " + (data.ok ? "ok" : "err");
+      statusDot.className  = "status-dot " + (data.ok ? "ok" : "err");
       statusText.textContent = data.ok
         ? `Ollama · ${data.models_count} modelo${data.models_count !== 1 ? "s" : ""}`
         : "Ollama desconectado";
     } catch {
-      statusDot.className = "status-dot err";
+      statusDot.className  = "status-dot err";
       statusText.textContent = "Sin conexión";
     }
   }
@@ -96,8 +110,7 @@
       while (projectSelect.options.length > 1) projectSelect.remove(1);
       allProjects.forEach(p => {
         const opt = document.createElement("option");
-        opt.value = String(p.id);
-        opt.textContent = p.name;
+        opt.value = String(p.id); opt.textContent = p.name;
         projectSelect.appendChild(opt);
       });
     } catch { }
@@ -116,23 +129,21 @@
       await loadConversations();
       return;
     }
-
     try {
-      const res = await fetch(`/projects/api/projects/${pid}`);
+      const res  = await fetch(`/projects/api/projects/${pid}`);
       const data = await res.json();
       currentProject = data.project;
-
-      projectBadge.textContent = "📁 " + data.project.name;
+      projectBadge.textContent  = "📁 " + data.project.name;
       projectBadge.style.display = "";
 
       skillsChips.innerHTML = "";
-      if (!data.skills || data.skills.length === 0) {
+      if (!data.skills?.length) {
         skillsPanel.style.display = "none";
       } else {
         skillsPanel.style.display = "";
         data.skills.forEach(s => {
           const chip = document.createElement("div");
-          chip.dataset.id = s.id;
+          chip.dataset.id  = s.id;
           chip.style.cssText = "padding:3px 8px;border-radius:12px;font-size:.72rem;font-weight:600;cursor:pointer;border:1px solid var(--accent);background:var(--accent-light);color:var(--accent);transition:all var(--transition);";
           chip.textContent = s.name;
           chip.title = s.description || s.name;
@@ -148,24 +159,23 @@
 
   function updateSaveBtn() {
     const saveBtn = document.getElementById("export-save-btn");
-    if (!saveBtn) return;
-    saveBtn.style.display = currentProject ? "" : "none";
+    if (saveBtn) saveBtn.style.display = currentProject ? "" : "none";
   }
 
   function toggleSkillChip(chip, skillId) {
     const idx = activeSkillIds.indexOf(skillId);
     if (idx === -1) {
       activeSkillIds.push(skillId);
-      chip.style.background = "var(--accent-light)";
+      chip.style.cssText = chip.style.cssText.replace(/opacity:[^;]+;?/, "");
+      chip.style.background  = "var(--accent-light)";
       chip.style.borderColor = "var(--accent)";
-      chip.style.color = "var(--accent)";
-      chip.style.opacity = "1";
+      chip.style.color       = "var(--accent)";
     } else {
       activeSkillIds.splice(idx, 1);
-      chip.style.background = "transparent";
+      chip.style.background  = "transparent";
       chip.style.borderColor = "var(--border-sidebar)";
-      chip.style.color = "var(--text-sidebar-muted)";
-      chip.style.opacity = ".5";
+      chip.style.color       = "var(--text-sidebar-muted)";
+      chip.style.opacity     = ".5";
     }
   }
 
@@ -173,7 +183,7 @@
     try {
       const pid = currentProject ? currentProject.id : "";
       const url = pid ? `/api/conversations?project_id=${pid}` : "/api/conversations";
-      const res = await fetch(url);
+      const res  = await fetch(url);
       const convs = await res.json();
       renderConvList(convs);
     } catch { }
@@ -181,7 +191,7 @@
 
   function renderConvList(convs) {
     convList.innerHTML = "";
-    if (convs.length === 0) {
+    if (!convs.length) {
       convList.innerHTML = '<p style="font-size:.78rem;color:var(--text-sidebar-muted);padding:8px 10px">Sin conversaciones aún</p>';
       return;
     }
@@ -195,34 +205,20 @@
     el.innerHTML = `
       <span class="conv-title" title="${esc(c.title)}">${esc(c.title)}</span>
       <span class="conv-actions">
-        <button class="conv-btn" data-action="move" title="Mover a proyecto">📁</button>
-        <button class="conv-btn" data-action="export" title="Exportar">⬇</button>
+        <button class="conv-btn" data-action="move"   title="Mover a proyecto">📁</button>
+        <button class="conv-btn" data-action="export" title="Exportar XML">⬇</button>
         <button class="conv-btn" data-action="delete" title="Eliminar">✕</button>
       </span>`;
-    el.addEventListener("click", e => {
-      if (e.target.closest("[data-action]")) return;
-      loadConversation(c.id, c.title);
-    });
-    el.querySelector("[data-action='delete']").addEventListener("click", e => {
-      e.stopPropagation(); confirmDelete(c.id, c.title);
-    });
-    el.querySelector("[data-action='export']").addEventListener("click", e => {
-      e.stopPropagation(); window.location.href = `/api/conversations/${c.id}/export`;
-    });
-    el.querySelector("[data-action='move']").addEventListener("click", e => {
-      e.stopPropagation(); openMoveModal(c.id, c.title);
-    });
+    el.addEventListener("click", e => { if (!e.target.closest("[data-action]")) loadConversation(c.id); });
+    el.querySelector("[data-action='delete']").addEventListener("click", e => { e.stopPropagation(); confirmDelete(c.id, c.title); });
+    el.querySelector("[data-action='export']").addEventListener("click", e => { e.stopPropagation(); window.location.href = `/api/conversations/${c.id}/export`; });
+    el.querySelector("[data-action='move']").addEventListener("click",   e => { e.stopPropagation(); openMoveModal(c.id, c.title); });
     return el;
   }
 
   function openMoveModal(convId, convTitle) {
-    const existing = document.getElementById("move-modal-overlay");
-    if (existing) existing.remove();
-
-    const opts = allProjects.map(p =>
-      `<option value="${p.id}">${esc(p.name)}</option>`
-    ).join("");
-
+    document.getElementById("move-modal-overlay")?.remove();
+    const opts = allProjects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.id = "move-modal-overlay";
@@ -231,8 +227,7 @@
         <h3>Mover conversación</h3>
         <p style="margin-bottom:12px;font-size:.85rem;color:var(--text-secondary);">${esc(convTitle)}</p>
         <select id="move-project-select" class="form-input" style="margin-bottom:16px;">
-          <option value="">— Sin proyecto —</option>
-          ${opts}
+          <option value="">— Sin proyecto —</option>${opts}
         </select>
         <div class="modal-actions">
           <button class="btn-sm" id="move-cancel">Cancelar</button>
@@ -240,18 +235,13 @@
         </div>
       </div>`;
     document.body.appendChild(overlay);
-
-    if (currentProject) {
-      overlay.querySelector("#move-project-select").value = String(currentProject.id);
-    }
-
+    if (currentProject) overlay.querySelector("#move-project-select").value = String(currentProject.id);
     overlay.querySelector("#move-cancel").addEventListener("click", () => overlay.remove());
     overlay.querySelector("#move-confirm").addEventListener("click", async () => {
       const newPid = overlay.querySelector("#move-project-select").value;
       overlay.remove();
       await fetch(`/api/conversations/${convId}/move`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: newPid ? Number(newPid) : null }),
       });
       await loadConversations();
@@ -264,11 +254,12 @@
     );
   }
 
-  async function loadConversation(id, title) {
+  async function loadConversation(id) {
     if (isStreaming) return;
     closeSidebar();
     currentConvId = id;
     setActiveConv(id);
+    lastAssistantBubble = null;
 
     messagesInner.innerHTML = `
       <div class="message assistant">
@@ -282,7 +273,7 @@
       </div>`;
 
     try {
-      const res = await fetch(`/api/conversations/${id}`);
+      const res  = await fetch(`/api/conversations/${id}`);
       const data = await res.json();
       renderMessages(data.messages || []);
       if (data.conversation?.model) {
@@ -295,9 +286,14 @@
   }
 
   function renderMessages(msgs) {
-    if (msgs.length === 0) { showEmptyState(); return; }
+    if (!msgs.length) { showEmptyState(); return; }
     messagesInner.innerHTML = "";
-    msgs.forEach(m => appendMessage(m.role, m.content));
+    msgs.forEach(m => {
+      const bubble = appendMessage(m.role, m.content);
+      if (m.role === "assistant") lastAssistantBubble = bubble;
+    });
+    // Mostrar botón continuar tras el último mensaje del asistente
+    appendContinueBtn();
     scrollToBottom();
   }
 
@@ -318,33 +314,87 @@
   function newChat() {
     if (isStreaming) return;
     currentConvId = null;
+    lastAssistantBubble = null;
     document.querySelectorAll(".conv-item").forEach(el => el.classList.remove("active"));
     showEmptyState();
     closeSidebar();
     chatTextarea.focus();
   }
 
+  // ── Botón Continuar ───────────────────────────────────────────────────────────
+
+  function appendContinueBtn() {
+    // Eliminar botón anterior si existe
+    document.getElementById("continue-btn-wrap")?.remove();
+
+    if (!currentConvId) return;
+
+    const wrap = document.createElement("div");
+    wrap.id = "continue-btn-wrap";
+    wrap.style.cssText = "display:flex;justify-content:center;padding:8px 0 4px;";
+    wrap.innerHTML = `
+      <button id="continue-btn" style="
+        padding:7px 18px;background:transparent;border:1px solid var(--border);
+        border-radius:20px;color:var(--text-secondary);font-family:var(--font-sans);
+        font-size:.78rem;cursor:pointer;transition:all var(--transition);display:flex;
+        align-items:center;gap:6px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+        Continuar respuesta
+      </button>`;
+    messagesInner.appendChild(wrap);
+
+    wrap.querySelector("#continue-btn").addEventListener("mouseenter", e => {
+      e.target.style.borderColor = "var(--accent)";
+      e.target.style.color = "var(--accent)";
+    });
+    wrap.querySelector("#continue-btn").addEventListener("mouseleave", e => {
+      e.target.style.borderColor = "var(--border)";
+      e.target.style.color = "var(--text-secondary)";
+    });
+    wrap.querySelector("#continue-btn").addEventListener("click", continueResponse);
+  }
+
+  async function continueResponse() {
+    if (isStreaming || !currentConvId) return;
+    document.getElementById("continue-btn-wrap")?.remove();
+    await streamResponse("Continúa exactamente donde te quedaste, sin repetir lo ya escrito.", true);
+  }
+
+  // ── Enviar mensaje ────────────────────────────────────────────────────────────
+
   async function sendMessage() {
     let content = chatTextarea.value.trim();
-    const model   = modelSelect.value;
+    const model = modelSelect.value;
     if (!content || !model || isStreaming) return;
 
     // Inyectar contexto del adjunto si existe
     const attachCtx = window.getAttachmentContext ? window.getAttachmentContext() : null;
-    if (attachCtx) {
-      content = content + attachCtx;
-    }
+    if (attachCtx) content = content + attachCtx;
 
-    const emptyState = messagesInner.querySelector(".empty-state");
-    if (emptyState) emptyState.remove();
-
-    // Solo mostrar al usuario el texto original (sin el contexto del adjunto)
     const displayContent = chatTextarea.value.trim();
     chatTextarea.value = "";
     resizeTextarea();
-    setStreaming(true);
 
+    // Limpiar botón continuar
+    document.getElementById("continue-btn-wrap")?.remove();
+
+    // Limpiar adjunto de un solo uso
+    if (window.clearAttachmentAfterSend) window.clearAttachmentAfterSend();
+
+    messagesInner.querySelector(".empty-state")?.remove();
     appendMessage("user", displayContent);
+    scrollToBottom();
+
+    await streamResponse(content, false, model);
+  }
+
+  async function streamResponse(content, isContinue = false, model = null) {
+    model = model || modelSelect.value;
+    if (!model) return;
+
+    setStreaming(true);
     const thinkingEl = appendThinking();
     scrollToBottom();
 
@@ -365,10 +415,7 @@
       return;
     }
 
-    // Limpiar adjunto de un solo uso después del envío
-    if (window.clearAttachmentAfterSend) window.clearAttachmentAfterSend();
-
-    const reader = response.body.getReader();
+    const reader  = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let assistantBubble = null;
@@ -386,6 +433,11 @@
         const raw = line.slice(6).trim();
         if (raw === "[DONE]") {
           setStreaming(false);
+          if (assistantBubble) {
+            assistantBubble.innerHTML = renderMarkdown(fullText);
+            lastAssistantBubble = assistantBubble;
+          }
+          appendContinueBtn();
           await loadConversations();
           break;
         }
@@ -399,7 +451,13 @@
             thinkingEl.remove();
             if (!assistantBubble) assistantBubble = appendMessageStreaming();
             fullText += obj.token;
-            assistantBubble.innerHTML = renderMarkdown(fullText);
+            // Renderizar markdown solo cada ~20 tokens para no saturar el DOM
+            if (fullText.length % 80 === 0) {
+              assistantBubble.innerHTML = renderMarkdown(fullText);
+            } else {
+              // Mostrar texto plano mientras llega (más rápido)
+              assistantBubble.textContent = fullText;
+            }
             scrollToBottom();
           }
           if (obj.error) {
@@ -412,6 +470,8 @@
     }
     setStreaming(false);
   }
+
+  // ── Helpers de UI ─────────────────────────────────────────────────────────────
 
   function appendMessage(role, content) {
     const el = document.createElement("div");
@@ -442,8 +502,7 @@
   }
 
   function appendMessageStreaming() {
-    const t = document.getElementById("thinking-msg");
-    if (t) t.remove();
+    document.getElementById("thinking-msg")?.remove();
     const el = document.createElement("div");
     el.className = "message assistant";
     el.innerHTML = `
@@ -472,38 +531,15 @@
   }
 
   function setStreaming(val) {
-    isStreaming = val;
-    sendBtn.disabled = val;
+    isStreaming         = val;
+    sendBtn.disabled    = val;
     chatTextarea.disabled = val;
   }
 
-  function renderMarkdown(text) {
-    let html = esc(text);
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
-      `<pre><code class="lang-${lang || "text"}">${code.trim()}</code></pre>`);
-    html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    html = html.replace(/_(.+?)_/g, "<em>$1</em>");
-    html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-    html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
-    html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-    html = html.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
-    html = html.replace(/^[*\-] (.+)$/gm, "<li>$1</li>");
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
-    html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
-    html = html.replace(/\n{2,}/g, "</p><p>");
-    html = "<p>" + html + "</p>";
-    html = html.replace(/([^>])\n([^<])/g, "$1<br>$2");
-    html = html.replace(/<p>\s*<\/p>/g, "");
-    html = html.replace(/<p>(<(?:pre|ul|ol|h[1-6]|blockquote))/g, "$1");
-    html = html.replace(/(<\/(?:pre|ul|ol|h[1-6]|blockquote)>)<\/p>/g, "$1");
-    return html;
-  }
-
   function esc(str) {
-    return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    return String(str)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
   function setupTextarea() {
@@ -520,9 +556,9 @@
   }
 
   function setupSidebar() {
-    if (sidebarToggle) sidebarToggle.addEventListener("click", () => sidebar.classList.toggle("open"));
+    if (sidebarToggle)  sidebarToggle.addEventListener("click", () => sidebar.classList.toggle("open"));
     if (sidebarOverlay) sidebarOverlay.addEventListener("click", closeSidebar);
-    if (newChatBtn) newChatBtn.addEventListener("click", newChat);
+    if (newChatBtn)     newChatBtn.addEventListener("click", newChat);
   }
 
   function closeSidebar() { sidebar.classList.remove("open"); }
