@@ -1,11 +1,12 @@
 /**
  * attachments.js — Lógica de adjuntos de entrada y exportación de salida.
- * Diseñado para ser incluido después de chat.js.
+ * Sesión 5: soporte de imágenes con OCR via modelos de visión.
  *
- * FIXES sesión 4.1:
- *  - El contexto del adjunto se inyecta correctamente en cada mensaje.
- *  - El panel de exportar solo aparece al pulsar el botón "Exportar" de la topbar.
- *  - El upload no pre-crea conversación innecesaria si ya existe una abierta.
+ * Cambios respecto a sesión 4:
+ *  - accept del input incluye image/jpeg, image/png, image/webp
+ *  - uploadFile() incluye el modelo activo en el FormData
+ *  - Panel de adjunto muestra preview de la imagen + texto OCR reconocido
+ *  - Mensaje de error claro si el modelo no es de visión
  */
 (function () {
   "use strict";
@@ -14,7 +15,7 @@
 
   let currentAttachment = null;
   // { id, conversation_id, original_name, chunk_unit, chunk_count, is_long,
-  //   loaded_from, loaded_to, loaded_text }
+  //   is_image, loaded_from, loaded_to, loaded_text }
 
   // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -68,14 +69,41 @@
     if (file) await uploadFile(file);
   });
 
+  // ── Helpers de tipo ───────────────────────────────────────────────────────────
+
+  function isImageFile(file) {
+    const imageMimes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (imageMimes.includes(file.type)) return true;
+    const ext = file.name.split(".").pop().toLowerCase();
+    return ["jpg", "jpeg", "png", "webp"].includes(ext);
+  }
+
+  function getActiveModel() {
+    const sel = document.getElementById("model-select");
+    return sel ? sel.value : "";
+  }
+
   // ── Upload ────────────────────────────────────────────────────────────────────
 
   async function uploadFile(file) {
     clearAttachment();
-    showAttachPanel({ original_name: file.name, size_bytes: file.size, loading: true });
+
+    const isImg = isImageFile(file);
+
+    // Para imágenes, mostrar panel de procesando con aviso de OCR
+    showAttachPanel({
+      original_name: file.name,
+      size_bytes:    file.size,
+      loading:       true,
+      is_image:      isImg,
+    });
 
     const fd = new FormData();
     fd.append("file", file);
+
+    // Modelo activo — necesario para OCR de imágenes
+    const model = getActiveModel();
+    if (model) fd.append("model", model);
 
     // Pasar conv_id solo si ya existe una conversación abierta
     const convId = window.getCurrentConvId ? window.getCurrentConvId() : null;
@@ -88,16 +116,20 @@
         const limitMB = 50;
         const fileMB  = (file.size / 1048576).toFixed(1);
         showAttachPanel({
-          error: `El archivo pesa ${fileMB} MB y supera el límite de ${limitMB} MB.`,
+          error:         `El archivo pesa ${fileMB} MB y supera el límite de ${limitMB} MB.`,
           original_name: file.name,
-          size_bytes: file.size
+          size_bytes:    file.size,
         });
         return;
       }
 
       const data = await res.json();
       if (!res.ok) {
-        showAttachPanel({ error: data.error || "Error subiendo archivo", original_name: file.name, size_bytes: file.size });
+        showAttachPanel({
+          error:         data.error || "Error subiendo archivo",
+          original_name: file.name,
+          size_bytes:    file.size,
+        });
         return;
       }
 
@@ -113,6 +145,7 @@
         chunk_unit:      data.chunk_unit,
         chunk_count:     data.chunk_count,
         is_long:         data.is_long,
+        is_image:        data.is_image || false,
         loaded_from:     null,
         loaded_to:       null,
         loaded_text:     null,
@@ -121,8 +154,8 @@
       attachBtn.classList.add("has-file");
 
       if (!data.is_long) {
-        // Archivo corto: cargar todo el contenido automáticamente
-        await loadRange(1, data.chunk_count);
+        // Archivo corto (o imagen OCR): cargar todo el contenido automáticamente
+        await loadRange(1, data.chunk_count, file);
       } else {
         showAttachPanel({
           original_name: data.original_name,
@@ -130,18 +163,23 @@
           chunk_count:   data.chunk_count,
           chunk_unit:    data.chunk_unit,
           is_long:       true,
+          is_image:      data.is_image || false,
           loaded_from:   null,
           loaded_to:     null,
         });
       }
     } catch {
-      showAttachPanel({ error: "Error de red al subir el archivo", original_name: file.name, size_bytes: file.size });
+      showAttachPanel({
+        error:         "Error de red al subir el archivo",
+        original_name: file.name,
+        size_bytes:    file.size,
+      });
     }
   }
 
   // ── Cargar rango ──────────────────────────────────────────────────────────────
 
-  async function loadRange(from, to) {
+  async function loadRange(from, to, originalFile) {
     if (!currentAttachment) return;
 
     try {
@@ -149,7 +187,6 @@
       const data = await res.json();
       if (!res.ok) { console.error("Error cargando rango:", data.error); return; }
 
-      // Guardar texto en el estado — getAttachmentContext() lo leerá desde aquí
       currentAttachment.loaded_from = data.from;
       currentAttachment.loaded_to   = data.to;
       currentAttachment.loaded_text = data.text;
@@ -161,10 +198,13 @@
         chunk_count:   currentAttachment.chunk_count,
         chunk_unit:    currentAttachment.chunk_unit,
         is_long:       currentAttachment.is_long,
+        is_image:      currentAttachment.is_image,
         loaded_from:   data.from,
         loaded_to:     data.to,
         total:         data.total,
         word_count:    wordCount,
+        ocr_preview:   currentAttachment.is_image ? data.text.slice(0, 300) : null,
+        original_file: originalFile || null,
       });
     } catch (err) {
       console.error("Error cargando rango:", err);
@@ -182,13 +222,15 @@
 
     const sizeStr   = opts.size_bytes ? formatBytes(opts.size_bytes) : "";
     const unitLabel = unitName(opts.chunk_unit);
+    const icon      = opts.is_image ? "🖼" : "📄";
 
     // Header
     const header = document.createElement("div");
     header.className = "attach-panel-header";
     header.innerHTML = `
-      <span class="attach-icon">📄</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(opts.original_name || "")}">${esc(opts.original_name || "")}</span>
+      <span class="attach-icon">${icon}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            title="${esc(opts.original_name || "")}">${esc(opts.original_name || "")}</span>
       ${sizeStr ? `<span class="attach-panel-meta">${sizeStr}</span>` : ""}
       <button class="attach-close-btn" id="attach-close-btn" title="Quitar adjunto">✕</button>
     `;
@@ -197,7 +239,9 @@
     if (opts.loading) {
       const st = document.createElement("div");
       st.className = "attach-status warning";
-      st.innerHTML = `<span>⏳</span> Procesando archivo…`;
+      st.innerHTML = opts.is_image
+        ? `<span>🔍</span> Reconociendo texto con OCR… (puede tardar unos segundos)`
+        : `<span>⏳</span> Procesando archivo…`;
       panel.appendChild(st);
 
     } else if (opts.error) {
@@ -206,8 +250,29 @@
       st.innerHTML = `<span>⚠</span> ${esc(opts.error)}`;
       panel.appendChild(st);
 
+    } else if (opts.is_image && opts.loaded_from !== null) {
+      // Imagen OCR completada
+      const st = document.createElement("div");
+      st.className = "attach-status ok";
+      st.innerHTML = `<span>✓</span> Texto reconocido (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirá en tu próximo mensaje`;
+      panel.appendChild(st);
+
+      // Preview del texto OCR
+      if (opts.ocr_preview) {
+        const preview = document.createElement("div");
+        preview.style.cssText = `
+          margin-top:8px;padding:8px 10px;
+          background:var(--bg-primary);border:1px solid var(--border);
+          border-radius:var(--radius-sm);font-size:.78rem;
+          color:var(--text-secondary);line-height:1.5;
+          max-height:80px;overflow:hidden;position:relative;
+        `;
+        preview.textContent = opts.ocr_preview + (opts.ocr_preview.length >= 300 ? "…" : "");
+        panel.appendChild(preview);
+      }
+
     } else if (!opts.is_long && opts.loaded_from !== null) {
-      // Archivo corto cargado — listo para enviar
+      // Archivo corto cargado
       const st = document.createElement("div");
       st.className = "attach-status ok";
       st.innerHTML = `<span>✓</span> Contenido cargado (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirá en tu próximo mensaje`;
@@ -226,9 +291,11 @@
       rangeWrap.innerHTML = `
         <div class="attach-range-row">
           <span class="attach-range-label">${capitalize(unitLabel)}s desde</span>
-          <input class="attach-range-input" id="range-from" type="number" min="1" max="${opts.chunk_count}" value="${opts.loaded_from || 1}">
+          <input class="attach-range-input" id="range-from" type="number" min="1"
+                 max="${opts.chunk_count}" value="${opts.loaded_from || 1}">
           <span class="attach-range-label">hasta</span>
-          <input class="attach-range-input" id="range-to" type="number" min="1" max="${opts.chunk_count}" value="${opts.loaded_to || defaultTo}">
+          <input class="attach-range-input" id="range-to" type="number" min="1"
+                 max="${opts.chunk_count}" value="${opts.loaded_to || defaultTo}">
           <button class="attach-range-btn" id="range-load-btn">Cargar rango</button>
         </div>
       `;
@@ -288,27 +355,21 @@
 
   // ── API pública para chat.js ──────────────────────────────────────────────────
 
-  /**
-   * Devuelve el texto del adjunto para concatenar al mensaje del usuario,
-   * o null si no hay adjunto con texto cargado.
-   */
   window.getAttachmentContext = function () {
     if (!currentAttachment || !currentAttachment.loaded_text) return null;
     const unit = unitName(currentAttachment.chunk_unit);
     const rangeDesc = currentAttachment.is_long
       ? ` (${unit}s ${currentAttachment.loaded_from}–${currentAttachment.loaded_to} de ${currentAttachment.chunk_count})`
       : "";
-    return `\n\n---\n[Archivo adjunto: ${currentAttachment.original_name}${rangeDesc}]\n\n${currentAttachment.loaded_text}\n---\n`;
+    const label = currentAttachment.is_image
+      ? `[Imagen adjunta: ${currentAttachment.original_name}${rangeDesc}]\n[Texto reconocido por OCR]`
+      : `[Archivo adjunto: ${currentAttachment.original_name}${rangeDesc}]`;
+    return `\n\n---\n${label}\n\n${currentAttachment.loaded_text}\n---\n`;
   };
 
-  /**
-   * Llamado por chat.js tras un envío exitoso.
-   * Archivos cortos: limpia el panel (texto ya enviado).
-   * Archivos largos: mantiene el panel para cargar el siguiente rango.
-   */
   window.clearAttachmentAfterSend = function () {
     if (!currentAttachment) return;
-    if (currentAttachment.is_long) return; // mantener para siguiente rango
+    if (currentAttachment.is_long) return;
     attachPanelWrap.innerHTML = "";
     attachPanelWrap.style.display = "none";
     attachBtn.classList.remove("has-file");
@@ -413,14 +474,16 @@
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   function formatBytes(b) {
-    if (b < 1024) return b + " B";
+    if (b < 1024)    return b + " B";
     if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
     return (b / 1048576).toFixed(1) + " MB";
   }
   function unitName(u) { return { page: "página", block: "bloque", row: "fila" }[u] || (u || "bloque"); }
   function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
   function esc(str) {
-    return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    return String(str)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────────

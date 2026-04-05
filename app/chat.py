@@ -1,5 +1,6 @@
 """
 Blueprint de chat con soporte de proyectos, habilidades, adjuntos y exportación.
+Sesión 5: soporte OCR de imágenes via modelos de visión de Ollama.
 """
 import json
 import xml.etree.ElementTree as ET
@@ -269,41 +270,61 @@ def api_upload():
     if not f or not f.filename:
         return jsonify({"error": "Archivo vacío"}), 400
 
-    conv_id = request.form.get("conversation_id", type=int)
+    conv_id       = request.form.get("conversation_id", type=int)
+    model         = request.form.get("model", "").strip()[:128]
     original_name = secure_filename(f.filename)
-    mime_type = f.content_type or "application/octet-stream"
-    file_bytes = f.read()
-    size_bytes = len(file_bytes)
+    mime_type     = f.content_type or "application/octet-stream"
+    file_bytes    = f.read()
+    size_bytes    = len(file_bytes)
 
     file_type = fp.resolve_file_type(mime_type, original_name)
     if file_type is None:
         return jsonify({"error": f"Tipo de archivo no soportado: {original_name}"}), 415
 
-    # Necesitamos un conv_id para guardar; si no hay, creamos una conversación temporal
+    # Validación especial para imágenes: requiere modelo de visión
+    if file_type == "image":
+        if not model:
+            return jsonify({
+                "error": "Selecciona un modelo antes de adjuntar una imagen."
+            }), 400
+        if not fp.is_vision_model(model):
+            return jsonify({
+                "error": (
+                    f"El modelo '{model}' no tiene capacidades de visión. "
+                    "Usa llava, moondream o llama3.2-vision para procesar imágenes."
+                )
+            }), 400
+
     db = get_db(current_app.config["DB_PATH"])
     if not conv_id:
-        model = request.form.get("model", "")
         conv_id = models.create_conversation(db, g.user["id"], model, None)
 
-    # Verificar que la conversación pertenece al usuario
     conv = models.get_conversation(db, conv_id, g.user["id"])
     if conv is None:
         db.close()
         return jsonify({"error": "Conversación no encontrada"}), 404
 
+    host = models.get_setting(db, "ollama_host") or current_app.config["OLLAMA_HOST"]
+
     try:
-        chunks = fp.extract_text(file_bytes, file_type)
+        chunks = fp.extract_text(
+            file_bytes, file_type,
+            ollama_host=host,
+            model=model,
+        )
     except Exception as exc:
         db.close()
         return jsonify({"error": f"Error extrayendo texto: {exc}"}), 422
 
-    chunk_unit = fp.chunk_unit_for(file_type)
+    chunk_unit  = fp.chunk_unit_for(file_type)
     chunk_count = len(chunks)
-    long_file = fp.is_long(chunks, file_type)
+    long_file   = fp.is_long(chunks, file_type)
 
     filename_stored, extracted_text_path = fp.save_upload(
         file_bytes, file_type, conv_id,
-        current_app.config["UPLOAD_FOLDER"]
+        current_app.config["UPLOAD_FOLDER"],
+        ollama_host=host,
+        model=model,
     )
 
     att_id = models.create_attachment(
@@ -315,13 +336,14 @@ def api_upload():
     preview_chunk = chunks[0][:2000] if chunks else ""
 
     return jsonify({
-        "attachment_id": att_id,
+        "attachment_id":   att_id,
         "conversation_id": conv_id,
-        "original_name": original_name,
-        "chunk_unit": chunk_unit,
-        "chunk_count": chunk_count,
-        "is_long": long_file,
-        "preview_chunk": preview_chunk,
+        "original_name":   original_name,
+        "chunk_unit":      chunk_unit,
+        "chunk_count":     chunk_count,
+        "is_long":         long_file,
+        "preview_chunk":   preview_chunk,
+        "is_image":        file_type == "image",
     }), 201
 
 
@@ -339,7 +361,6 @@ def api_attachment_range(attachment_id):
         db.close()
         return jsonify({"error": "Adjunto no encontrado"}), 404
 
-    # Verificar que la conversación pertenece al usuario
     conv = models.get_conversation(db, att["conversation_id"], g.user["id"])
     db.close()
     if conv is None:
@@ -347,18 +368,17 @@ def api_attachment_range(attachment_id):
 
     text, total = fp.get_chunk_range(att["extracted_text_path"], from_idx, to_idx)
     return jsonify({
-        "text": text,
+        "text":       text,
         "chunk_unit": att["chunk_unit"],
-        "from": from_idx,
-        "to": to_idx,
-        "total": total,
+        "from":       from_idx,
+        "to":         to_idx,
+        "total":      total,
     })
 
 
 @bp.route("/api/attachments/<int:attachment_id>", methods=["DELETE"])
 @login_required
 def api_delete_attachment(attachment_id):
-    import os
     db = get_db(current_app.config["DB_PATH"])
     att = models.get_attachment(db, attachment_id)
     if att is None:
@@ -370,12 +390,10 @@ def api_delete_attachment(attachment_id):
         db.close()
         return jsonify({"error": "Acceso denegado"}), 403
 
-    # Borrar archivos en disco
     txt_path = Path(att["extracted_text_path"])
     if txt_path.exists():
         txt_path.unlink()
 
-    # El archivo original está en el mismo directorio con el mismo uuid pero extensión original
     orig_dir = txt_path.parent
     stem = txt_path.stem
     for p in orig_dir.glob(stem + ".*"):
@@ -433,11 +451,10 @@ def api_export():
         )
         db.close()
         return jsonify({
-            "output_id": output_id,
+            "output_id":    output_id,
             "download_url": f"/api/outputs/{output_id}/download",
         }), 201
     else:
-        # Descarga directa
         import io
         return Response(
             file_bytes,
@@ -460,7 +477,6 @@ def api_download_output(output_id):
         db.close()
         return jsonify({"error": "Archivo no encontrado"}), 404
 
-    # Verificar que el proyecto pertenece al usuario
     project = models.get_project(db, output["project_id"], g.user["id"])
     db.close()
     if project is None:
@@ -493,7 +509,6 @@ def api_delete_output(output_id):
         db.close()
         return jsonify({"error": "Acceso denegado"}), 403
 
-    # Borrar de disco
     fpath = Path(current_app.config["OUTPUT_FOLDER"]) / str(output["project_id"]) / output["filename_stored"]
     if fpath.exists():
         fpath.unlink()
