@@ -1,12 +1,11 @@
 /**
- * attachments.js — Lógica de adjuntos de entrada y exportación de salida.
- * Sesión 5: soporte de imágenes con OCR via modelos de visión.
+ * attachments.js — Adjuntos de entrada y exportación de salida.
+ * Sesión 5 (v2): imágenes enviadas como nativas a Ollama.
  *
- * Cambios respecto a sesión 4:
- *  - accept del input incluye image/jpeg, image/png, image/webp
- *  - uploadFile() incluye el modelo activo en el FormData
- *  - Panel de adjunto muestra preview de la imagen + texto OCR reconocido
- *  - Mensaje de error claro si el modelo no es de visión
+ * Flujo imagen:
+ *   1. Usuario sube imagen → se guarda en servidor, preview local en panel
+ *   2. Usuario escribe pregunta y envía
+ *   3. chat.js incluye attachment_id en el payload → api_chat envía imagen en base64
  */
 (function () {
   "use strict";
@@ -14,8 +13,8 @@
   // ── Estado ────────────────────────────────────────────────────────────────────
 
   let currentAttachment = null;
-  // { id, conversation_id, original_name, chunk_unit, chunk_count, is_long,
-  //   is_image, loaded_from, loaded_to, loaded_text }
+  // { id, conversation_id, original_name, chunk_unit, chunk_count,
+  //   is_long, is_image, loaded_text (null para imágenes) }
 
   // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -28,10 +27,9 @@
 
   if (!fileInput || !attachBtn) return;
 
-  // Panel de exportar: siempre oculto al inicio
   if (exportPanel) exportPanel.style.display = "none";
 
-  // ── Botón Exportar en topbar ──────────────────────────────────────────────────
+  // ── Botón Exportar ────────────────────────────────────────────────────────────
 
   if (exportToggleBtn) {
     exportToggleBtn.addEventListener("click", () => {
@@ -69,11 +67,11 @@
     if (file) await uploadFile(file);
   });
 
-  // ── Helpers de tipo ───────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────────
 
   function isImageFile(file) {
-    const imageMimes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (imageMimes.includes(file.type)) return true;
+    const mimes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (mimes.includes(file.type)) return true;
     const ext = file.name.split(".").pop().toLowerCase();
     return ["jpg", "jpeg", "png", "webp"].includes(ext);
   }
@@ -83,29 +81,23 @@
     return sel ? sel.value : "";
   }
 
+  // Crea una URL local para preview de imagen sin subir al servidor
+  function createLocalPreview(file) {
+    return URL.createObjectURL(file);
+  }
+
   // ── Upload ────────────────────────────────────────────────────────────────────
 
   async function uploadFile(file) {
     clearAttachment();
-
     const isImg = isImageFile(file);
 
-    // Para imágenes, mostrar panel de procesando con aviso de OCR
-    showAttachPanel({
-      original_name: file.name,
-      size_bytes:    file.size,
-      loading:       true,
-      is_image:      isImg,
-    });
+    showAttachPanel({ original_name: file.name, size_bytes: file.size, loading: true, is_image: isImg });
 
     const fd = new FormData();
     fd.append("file", file);
-
-    // Modelo activo — necesario para OCR de imágenes
     const model = getActiveModel();
     if (model) fd.append("model", model);
-
-    // Pasar conv_id solo si ya existe una conversación abierta
     const convId = window.getCurrentConvId ? window.getCurrentConvId() : null;
     if (convId) fd.append("conversation_id", String(convId));
 
@@ -113,27 +105,17 @@
       const res = await fetch("/api/upload", { method: "POST", body: fd });
 
       if (res.status === 413) {
-        const limitMB = 50;
-        const fileMB  = (file.size / 1048576).toFixed(1);
-        showAttachPanel({
-          error:         `El archivo pesa ${fileMB} MB y supera el límite de ${limitMB} MB.`,
-          original_name: file.name,
-          size_bytes:    file.size,
-        });
+        const fileMB = (file.size / 1048576).toFixed(1);
+        showAttachPanel({ error: `El archivo pesa ${fileMB} MB y supera el límite de 50 MB.`, original_name: file.name, size_bytes: file.size });
         return;
       }
 
       const data = await res.json();
       if (!res.ok) {
-        showAttachPanel({
-          error:         data.error || "Error subiendo archivo",
-          original_name: file.name,
-          size_bytes:    file.size,
-        });
+        showAttachPanel({ error: data.error || "Error subiendo archivo", original_name: file.name, size_bytes: file.size });
         return;
       }
 
-      // Si el backend creó una conversación nueva, registrarla en chat.js
       if (data.conversation_id && window.setCurrentConvId) {
         window.setCurrentConvId(data.conversation_id);
       }
@@ -153,9 +135,18 @@
 
       attachBtn.classList.add("has-file");
 
-      if (!data.is_long) {
-        // Archivo corto (o imagen OCR): cargar todo el contenido automáticamente
-        await loadRange(1, data.chunk_count, file);
+      if (isImg) {
+        // Imagen: mostrar preview local, sin OCR, listo para enviar
+        const previewUrl = createLocalPreview(file);
+        showAttachPanel({
+          original_name: data.original_name,
+          size_bytes:    file.size,
+          is_image:      true,
+          image_ready:   true,
+          preview_url:   previewUrl,
+        });
+      } else if (!data.is_long) {
+        await loadRange(1, data.chunk_count);
       } else {
         showAttachPanel({
           original_name: data.original_name,
@@ -163,25 +154,19 @@
           chunk_count:   data.chunk_count,
           chunk_unit:    data.chunk_unit,
           is_long:       true,
-          is_image:      data.is_image || false,
           loaded_from:   null,
           loaded_to:     null,
         });
       }
     } catch {
-      showAttachPanel({
-        error:         "Error de red al subir el archivo",
-        original_name: file.name,
-        size_bytes:    file.size,
-      });
+      showAttachPanel({ error: "Error de red al subir el archivo", original_name: file.name, size_bytes: file.size });
     }
   }
 
-  // ── Cargar rango ──────────────────────────────────────────────────────────────
+  // ── Cargar rango (solo para documentos) ──────────────────────────────────────
 
-  async function loadRange(from, to, originalFile) {
+  async function loadRange(from, to) {
     if (!currentAttachment) return;
-
     try {
       const res  = await fetch(`/api/attachments/${currentAttachment.id}/range?from=${from}&to=${to}`);
       const data = await res.json();
@@ -192,19 +177,16 @@
       currentAttachment.loaded_text = data.text;
 
       const wordCount = data.text.split(/\s+/).filter(Boolean).length;
-
       showAttachPanel({
         original_name: currentAttachment.original_name,
         chunk_count:   currentAttachment.chunk_count,
         chunk_unit:    currentAttachment.chunk_unit,
         is_long:       currentAttachment.is_long,
-        is_image:      currentAttachment.is_image,
+        is_image:      false,
         loaded_from:   data.from,
         loaded_to:     data.to,
         total:         data.total,
         word_count:    wordCount,
-        ocr_preview:   currentAttachment.is_image ? data.text.slice(0, 300) : null,
-        original_file: originalFile || null,
       });
     } catch (err) {
       console.error("Error cargando rango:", err);
@@ -217,12 +199,11 @@
     attachPanelWrap.innerHTML = "";
     attachPanelWrap.style.display = "block";
 
-    const panel     = document.createElement("div");
+    const panel = document.createElement("div");
     panel.className = "attach-panel";
 
-    const sizeStr   = opts.size_bytes ? formatBytes(opts.size_bytes) : "";
-    const unitLabel = unitName(opts.chunk_unit);
-    const icon      = opts.is_image ? "🖼" : "📄";
+    const sizeStr = opts.size_bytes ? formatBytes(opts.size_bytes) : "";
+    const icon    = opts.is_image ? "🖼" : "📄";
 
     // Header
     const header = document.createElement("div");
@@ -232,16 +213,13 @@
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
             title="${esc(opts.original_name || "")}">${esc(opts.original_name || "")}</span>
       ${sizeStr ? `<span class="attach-panel-meta">${sizeStr}</span>` : ""}
-      <button class="attach-close-btn" id="attach-close-btn" title="Quitar adjunto">✕</button>
-    `;
+      <button class="attach-close-btn" id="attach-close-btn" title="Quitar adjunto">✕</button>`;
     panel.appendChild(header);
 
     if (opts.loading) {
       const st = document.createElement("div");
       st.className = "attach-status warning";
-      st.innerHTML = opts.is_image
-        ? `<span>🔍</span> Reconociendo texto con OCR… (puede tardar unos segundos)`
-        : `<span>⏳</span> Procesando archivo…`;
+      st.innerHTML = `<span>⏳</span> Subiendo archivo…`;
       panel.appendChild(st);
 
     } else if (opts.error) {
@@ -250,39 +228,35 @@
       st.innerHTML = `<span>⚠</span> ${esc(opts.error)}`;
       panel.appendChild(st);
 
-    } else if (opts.is_image && opts.loaded_from !== null) {
-      // Imagen OCR completada
+    } else if (opts.is_image && opts.image_ready) {
+      // ── Imagen lista: preview + instrucción ──────────────────────────────
       const st = document.createElement("div");
       st.className = "attach-status ok";
-      st.innerHTML = `<span>✓</span> Texto reconocido (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirá en tu próximo mensaje`;
+      st.innerHTML = `<span>✓</span> Imagen adjunta · Escribe tu pregunta y envía`;
       panel.appendChild(st);
 
-      // Preview del texto OCR
-      if (opts.ocr_preview) {
-        const preview = document.createElement("div");
-        preview.style.cssText = `
-          margin-top:8px;padding:8px 10px;
-          background:var(--bg-primary);border:1px solid var(--border);
-          border-radius:var(--radius-sm);font-size:.78rem;
-          color:var(--text-secondary);line-height:1.5;
-          max-height:80px;overflow:hidden;position:relative;
-        `;
-        preview.textContent = opts.ocr_preview + (opts.ocr_preview.length >= 300 ? "…" : "");
-        panel.appendChild(preview);
+      if (opts.preview_url) {
+        const img = document.createElement("img");
+        img.src = opts.preview_url;
+        img.style.cssText = `
+          display:block;max-width:100%;max-height:160px;
+          object-fit:contain;border-radius:var(--radius-sm);
+          margin-top:8px;border:1px solid var(--border);`;
+        img.onload = () => URL.revokeObjectURL(opts.preview_url); // liberar memoria
+        panel.appendChild(img);
       }
 
     } else if (!opts.is_long && opts.loaded_from !== null) {
-      // Archivo corto cargado
       const st = document.createElement("div");
       st.className = "attach-status ok";
       st.innerHTML = `<span>✓</span> Contenido cargado (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirá en tu próximo mensaje`;
       panel.appendChild(st);
 
     } else if (opts.is_long) {
-      // Selector de rango para archivo largo
+      const unitLabel = unitName(opts.chunk_unit);
       const warn = document.createElement("div");
       warn.className = "attach-status warning";
-      warn.innerHTML = `<span>⚠</span> Archivo extenso · ${opts.chunk_count} ${unitLabel}s en total. Selecciona el rango a analizar:`;
+      warn.innerHTML = `<span>⚠</span> Archivo extenso · ${opts.chunk_count} ${unitLabel}s en total. Selecciona el rango:`;
       panel.appendChild(warn);
 
       const rangeWrap = document.createElement("div");
@@ -297,13 +271,12 @@
           <input class="attach-range-input" id="range-to" type="number" min="1"
                  max="${opts.chunk_count}" value="${opts.loaded_to || defaultTo}">
           <button class="attach-range-btn" id="range-load-btn">Cargar rango</button>
-        </div>
-      `;
+        </div>`;
 
       if (opts.loaded_from !== null) {
         const loaded = document.createElement("div");
         loaded.className = "attach-loaded-info";
-        loaded.innerHTML = `✓ ${capitalize(unitLabel)}s ${opts.loaded_from}–${opts.loaded_to} cargados (${(opts.word_count || 0).toLocaleString()} palabras) · Se incluirán en tu próximo mensaje`;
+        loaded.innerHTML = `✓ ${capitalize(unitLabel)}s ${opts.loaded_from}–${opts.loaded_to} cargados (${(opts.word_count || 0).toLocaleString()} palabras)`;
         rangeWrap.appendChild(loaded);
 
         if (opts.loaded_to < opts.total) {
@@ -321,22 +294,18 @@
       }
 
       panel.appendChild(rangeWrap);
-
       setTimeout(() => {
         const btn = document.getElementById("range-load-btn");
-        if (btn) {
-          btn.addEventListener("click", async () => {
-            const from = parseInt(document.getElementById("range-from").value, 10);
-            const to   = parseInt(document.getElementById("range-to").value, 10);
-            if (isNaN(from) || isNaN(to) || from < 1 || to < from) return;
-            await loadRange(from, Math.min(to, currentAttachment.chunk_count));
-          });
-        }
+        if (btn) btn.addEventListener("click", async () => {
+          const from = parseInt(document.getElementById("range-from").value, 10);
+          const to   = parseInt(document.getElementById("range-to").value, 10);
+          if (isNaN(from) || isNaN(to) || from < 1 || to < from) return;
+          await loadRange(from, Math.min(to, currentAttachment.chunk_count));
+        });
       }, 0);
     }
 
     attachPanelWrap.appendChild(panel);
-
     setTimeout(() => {
       const closeBtn = document.getElementById("attach-close-btn");
       if (closeBtn) closeBtn.addEventListener("click", clearAttachment);
@@ -355,16 +324,28 @@
 
   // ── API pública para chat.js ──────────────────────────────────────────────────
 
+  /**
+   * Para documentos: devuelve el texto a inyectar en el mensaje.
+   * Para imágenes: devuelve null (la imagen va por attachment_id, no por texto).
+   */
   window.getAttachmentContext = function () {
-    if (!currentAttachment || !currentAttachment.loaded_text) return null;
+    if (!currentAttachment) return null;
+    if (currentAttachment.is_image) return null;  // imagen: va nativa
+    if (!currentAttachment.loaded_text) return null;
     const unit = unitName(currentAttachment.chunk_unit);
     const rangeDesc = currentAttachment.is_long
       ? ` (${unit}s ${currentAttachment.loaded_from}–${currentAttachment.loaded_to} de ${currentAttachment.chunk_count})`
       : "";
-    const label = currentAttachment.is_image
-      ? `[Imagen adjunta: ${currentAttachment.original_name}${rangeDesc}]\n[Texto reconocido por OCR]`
-      : `[Archivo adjunto: ${currentAttachment.original_name}${rangeDesc}]`;
-    return `\n\n---\n${label}\n\n${currentAttachment.loaded_text}\n---\n`;
+    return `\n\n---\n[Archivo adjunto: ${currentAttachment.original_name}${rangeDesc}]\n\n${currentAttachment.loaded_text}\n---\n`;
+  };
+
+  /**
+   * Para imágenes: devuelve el attachment_id para que chat.js lo incluya en el payload.
+   * Para documentos: devuelve null.
+   */
+  window.getAttachmentId = function () {
+    if (!currentAttachment || !currentAttachment.is_image) return null;
+    return currentAttachment.id;
   };
 
   window.clearAttachmentAfterSend = function () {
@@ -385,35 +366,30 @@
     const dlBtn       = document.getElementById("export-download-btn");
     const saveBtn     = document.getElementById("export-save-btn");
     const resultEl    = document.getElementById("export-result");
-
     if (!formatSel) return;
 
     const TEMPLATE_OPTIONS = {
-      txt:  ["libre"],
-      md:   ["libre"],
-      csv:  ["libre"],
-      docx: ["libre", "informe", "carta", "legal", "email", "resumen"],
-      pdf:  ["libre", "informe", "carta", "legal", "email", "resumen"],
+      txt:  ["libre"], md: ["libre"], csv: ["libre"],
+      docx: ["libre","informe","carta","legal","email","resumen"],
+      pdf:  ["libre","informe","carta","legal","email","resumen"],
     };
     const TEMPLATE_LABELS = {
-      libre: "Texto libre", informe: "Informe", carta: "Carta",
-      legal: "Escrito legal", email: "Email", resumen: "Resumen ejecutivo",
+      libre:"Texto libre", informe:"Informe", carta:"Carta",
+      legal:"Escrito legal", email:"Email", resumen:"Resumen ejecutivo",
     };
 
     formatSel.addEventListener("change", () => {
       const opts = TEMPLATE_OPTIONS[formatSel.value] || ["libre"];
-      templateSel.innerHTML = opts.map(t => `<option value="${t}">${TEMPLATE_LABELS[t] || t}</option>`).join("");
+      templateSel.innerHTML = opts.map(t => `<option value="${t}">${TEMPLATE_LABELS[t]||t}</option>`).join("");
     });
 
     async function doExport(saveToProject) {
       const text = collectConversationText();
       if (!text) { showResult("No hay respuestas del asistente para exportar.", false); return; }
-
       const fmt      = formatSel.value;
       const template = templateSel.value;
       const filename = (filenameInp.value.trim() || "documento").replace(/[^\w\-\.]/g, "_");
       const body     = { text, format: fmt, template, filename };
-
       if (saveToProject) {
         const pid = window.getCurrentProjectId ? window.getCurrentProjectId() : null;
         if (!pid) { showResult("No hay proyecto activo.", false); return; }
@@ -421,29 +397,21 @@
         const cid = window.getCurrentConvId ? window.getCurrentConvId() : null;
         if (cid) body.conversation_id = cid;
       }
-
       [dlBtn, saveBtn].forEach(b => b && (b.disabled = true));
       showResult("Generando…", null);
-
       try {
         const res = await fetch("/api/export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        if (!res.ok) {
-          const err = await res.json();
-          showResult(err.error || "Error generando archivo.", false);
-          return;
-        }
+        if (!res.ok) { const err = await res.json(); showResult(err.error || "Error.", false); return; }
         if (saveToProject) {
-          showResult(`✓ Guardado en el proyecto. <a href="/projects/" style="color:var(--accent)">Ver en Proyectos</a>`, true);
+          showResult(`✓ Guardado. <a href="/projects/" style="color:var(--accent)">Ver en Proyectos</a>`, true);
         } else {
           const blob = await res.blob();
           const url  = URL.createObjectURL(blob);
           const a    = Object.assign(document.createElement("a"), { href: url, download: filename + "." + fmt });
-          document.body.appendChild(a);
-          a.click();
+          document.body.appendChild(a); a.click();
           setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
           showResult("✓ Descarga iniciada.", true);
         }
@@ -466,27 +434,20 @@
     const msgInner = document.getElementById("messages-inner");
     if (!msgInner) return "";
     return [...msgInner.querySelectorAll(".message.assistant .message-bubble")]
-      .map(b => b.innerText || b.textContent || "")
-      .filter(Boolean)
-      .join("\n\n");
+      .map(b => b.innerText || b.textContent || "").filter(Boolean).join("\n\n");
   }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────────
 
   function formatBytes(b) {
     if (b < 1024)    return b + " B";
     if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
     return (b / 1048576).toFixed(1) + " MB";
   }
-  function unitName(u) { return { page: "página", block: "bloque", row: "fila" }[u] || (u || "bloque"); }
-  function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+  function unitName(u)  { return { page:"página", block:"bloque", row:"fila" }[u] || (u||"bloque"); }
+  function capitalize(s){ return s ? s[0].toUpperCase() + s.slice(1) : s; }
   function esc(str) {
-    return String(str)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;")
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   }
-
-  // ── Init ──────────────────────────────────────────────────────────────────────
 
   document.addEventListener("DOMContentLoaded", initExportPanel);
   if (document.readyState !== "loading") initExportPanel();

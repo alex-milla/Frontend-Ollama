@@ -1,6 +1,7 @@
 """
 Blueprint de chat con soporte de proyectos, habilidades, adjuntos y exportación.
-Sesión 5: soporte OCR de imágenes via modelos de visión de Ollama.
+Sesión 5: imágenes enviadas a Ollama como imagen nativa en api_chat(),
+           sin OCR automático en el upload.
 """
 import json
 import xml.etree.ElementTree as ET
@@ -35,7 +36,7 @@ def index():
 @login_required
 def api_models():
     host = _ollama_host()
-    raw = ollama_client.list_models(host)
+    raw  = ollama_client.list_models(host)
     names = [m.get("name", "") for m in raw if m.get("name")]
     return jsonify({"models": names})
 
@@ -43,7 +44,7 @@ def api_models():
 @bp.route("/api/ollama/status")
 @login_required
 def api_ollama_status():
-    host = _ollama_host()
+    host   = _ollama_host()
     result = ollama_client.check_connection(host)
     result["host"] = host
     return jsonify(result)
@@ -74,11 +75,11 @@ def api_list_conversations():
 @login_required
 def api_create_conversation():
     data = request.get_json(silent=True) or {}
-    model = str(data.get("model", "")).strip()[:128]
+    model      = str(data.get("model", "")).strip()[:128]
     project_id = data.get("project_id")
     db = get_db(current_app.config["DB_PATH"])
     conv_id = models.create_conversation(db, g.user["id"], model, project_id)
-    conv = models.get_conversation(db, conv_id, g.user["id"])
+    conv    = models.get_conversation(db, conv_id, g.user["id"])
     db.close()
     return jsonify(dict(conv)), 201
 
@@ -110,7 +111,7 @@ def api_delete_conversation(conv_id):
 @bp.route("/api/conversations/<int:conv_id>/move", methods=["PATCH"])
 @login_required
 def api_move_conversation(conv_id):
-    data = request.get_json(silent=True) or {}
+    data       = request.get_json(silent=True) or {}
     project_id = data.get("project_id")
     db = get_db(current_app.config["DB_PATH"])
     conv = models.get_conversation(db, conv_id, g.user["id"])
@@ -139,21 +140,21 @@ def api_export_conversation(conv_id):
     msgs = models.list_messages(db, conv_id)
     db.close()
 
-    root = ET.Element("conversation")
-    meta = ET.SubElement(root, "metadata")
-    ET.SubElement(meta, "title").text = conv["title"]
-    ET.SubElement(meta, "model").text = conv["model"]
-    ET.SubElement(meta, "created").text = conv["created_at"]
+    root       = ET.Element("conversation")
+    meta       = ET.SubElement(root, "metadata")
+    ET.SubElement(meta, "title").text          = conv["title"]
+    ET.SubElement(meta, "model").text          = conv["model"]
+    ET.SubElement(meta, "created").text        = conv["created_at"]
     ET.SubElement(meta, "messages_count").text = str(len(msgs))
 
     messages_el = ET.SubElement(root, "messages")
     for m in msgs:
         msg_el = ET.SubElement(messages_el, "message")
-        msg_el.set("role", m["role"])
+        msg_el.set("role",      m["role"])
         msg_el.set("timestamp", m["created_at"])
         msg_el.text = m["content"]
 
-    xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+    xml_str  = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
     filename = f"conversacion-{conv_id}.xml"
     return Response(
         xml_str,
@@ -162,15 +163,21 @@ def api_export_conversation(conv_id):
     )
 
 
+# ── Chat con soporte de imagen nativa ─────────────────────────────────────────
+
 @bp.route("/api/chat", methods=["POST"])
 @login_required
 def api_chat():
-    data = request.get_json(silent=True) or {}
+    from . import file_processor as fp
+
+    data       = request.get_json(silent=True) or {}
     conv_id    = data.get("conversation_id")
     model      = str(data.get("model", "")).strip()[:128]
     content    = str(data.get("message", "")).strip()
     project_id = data.get("project_id")
     skill_ids  = data.get("skill_ids", [])
+    # attachment_id opcional — si viene, adjuntamos la imagen al mensaje
+    attachment_id = data.get("attachment_id")
 
     if not content or not model:
         return jsonify({"error": "Faltan campos requeridos"}), 400
@@ -193,8 +200,24 @@ def api_chat():
         title = content[:60] + ("…" if len(content) > 60 else "")
         models.update_conversation_title(db, conv_id, title)
 
-    history = models.list_messages(db, conv_id)
+    history     = models.list_messages(db, conv_id)
     ollama_msgs = [{"role": m["role"], "content": m["content"]} for m in history]
+
+    # Si hay imagen adjunta, añadirla al último mensaje (el del usuario)
+    image_b64 = None
+    if attachment_id:
+        att = models.get_attachment(db, attachment_id)
+        if att and att["chunk_unit"] == "block":
+            # chunk_unit "block" se usa para imágenes en este flujo
+            b64 = fp.read_image_base64(att["extracted_text_path"])
+            if b64:
+                image_b64 = b64
+
+    if image_b64 and ollama_msgs:
+        # El último mensaje es el del usuario — añadimos la imagen
+        last = ollama_msgs[-1].copy()
+        last["images"] = [image_b64]
+        ollama_msgs[-1] = last
 
     system_prompt = ""
     if skill_ids:
@@ -274,41 +297,30 @@ def api_upload():
     model     = request.form.get("model", "").strip()[:128]
     mime_type = f.content_type or "application/octet-stream"
 
-    # Extraer extensión del nombre original ANTES de sanitizarlo,
-    # porque secure_filename puede eliminar caracteres que dejan sin extensión.
-    raw_name  = f.filename or ""
-    raw_ext   = Path(raw_name).suffix.lower()          # e.g. ".png"
-
+    # Extraer extensión ANTES de secure_filename para no perderla
+    raw_name = f.filename or ""
+    raw_ext  = Path(raw_name).suffix.lower()
     original_name = secure_filename(raw_name) or ("archivo" + raw_ext)
-
-    # Si secure_filename eliminó la extensión, reponerla
     if raw_ext and not original_name.lower().endswith(raw_ext):
         original_name = original_name + raw_ext
 
     file_bytes = f.read()
     size_bytes = len(file_bytes)
 
-    # Resolver tipo: primero por extensión original (más fiable que el MIME
-    # cuando el navegador envía application/octet-stream)
     file_type = fp.resolve_file_type(mime_type, original_name)
     if file_type is None and raw_ext:
         file_type = fp.resolve_file_type("application/octet-stream", "x" + raw_ext)
     if file_type is None:
         return jsonify({"error": f"Tipo de archivo no soportado: {original_name}"}), 415
 
-    # Validación especial para imágenes: requiere modelo de visión
-    if file_type == "image":
-        if not model:
-            return jsonify({
-                "error": "Selecciona un modelo antes de adjuntar una imagen."
-            }), 400
-        if not fp.is_vision_model(model):
-            return jsonify({
-                "error": (
-                    f"El modelo '{model}' no tiene capacidades de visión. "
-                    "Usa llava, moondream o llama3.2-vision para procesar imágenes."
-                )
-            }), 400
+    # Para imágenes: validar que el modelo activo sea de visión
+    if file_type == "image" and model and not fp.is_vision_model(model):
+        return jsonify({
+            "error": (
+                f"El modelo '{model}' no soporta imágenes. "
+                "Selecciona llava, moondream o llama3.2-vision."
+            )
+        }), 400
 
     db = get_db(current_app.config["DB_PATH"])
     if not conv_id:
@@ -322,14 +334,10 @@ def api_upload():
     host = models.get_setting(db, "ollama_host") or current_app.config["OLLAMA_HOST"]
 
     try:
-        chunks = fp.extract_text(
-            file_bytes, file_type,
-            ollama_host=host,
-            model=model,
-        )
+        chunks = fp.extract_text(file_bytes, file_type)
     except Exception as exc:
         db.close()
-        return jsonify({"error": f"Error extrayendo texto: {exc}"}), 422
+        return jsonify({"error": f"Error procesando archivo: {exc}"}), 422
 
     chunk_unit  = fp.chunk_unit_for(file_type)
     chunk_count = len(chunks)
@@ -338,8 +346,6 @@ def api_upload():
     filename_stored, extracted_text_path = fp.save_upload(
         file_bytes, file_type, conv_id,
         current_app.config["UPLOAD_FOLDER"],
-        ollama_host=host,
-        model=model,
     )
 
     att_id = models.create_attachment(
@@ -348,7 +354,7 @@ def api_upload():
     )
     db.close()
 
-    preview_chunk = chunks[0][:2000] if chunks else ""
+    preview_chunk = chunks[0][:2000] if chunks and file_type != "image" else ""
 
     return jsonify({
         "attachment_id":   att_id,
@@ -357,8 +363,8 @@ def api_upload():
         "chunk_unit":      chunk_unit,
         "chunk_count":     chunk_count,
         "is_long":         long_file,
-        "preview_chunk":   preview_chunk,
         "is_image":        file_type == "image",
+        "preview_chunk":   preview_chunk,
     }), 201
 
 
@@ -370,7 +376,7 @@ def api_attachment_range(attachment_id):
     from_idx = request.args.get("from", 1, type=int)
     to_idx   = request.args.get("to", 10, type=int)
 
-    db = get_db(current_app.config["DB_PATH"])
+    db  = get_db(current_app.config["DB_PATH"])
     att = models.get_attachment(db, attachment_id)
     if att is None:
         db.close()
@@ -394,7 +400,7 @@ def api_attachment_range(attachment_id):
 @bp.route("/api/attachments/<int:attachment_id>", methods=["DELETE"])
 @login_required
 def api_delete_attachment(attachment_id):
-    db = get_db(current_app.config["DB_PATH"])
+    db  = get_db(current_app.config["DB_PATH"])
     att = models.get_attachment(db, attachment_id)
     if att is None:
         db.close()
@@ -408,7 +414,6 @@ def api_delete_attachment(attachment_id):
     txt_path = Path(att["extracted_text_path"])
     if txt_path.exists():
         txt_path.unlink()
-
     orig_dir = txt_path.parent
     stem = txt_path.stem
     for p in orig_dir.glob(stem + ".*"):
@@ -427,13 +432,13 @@ def api_delete_attachment(attachment_id):
 def api_export():
     from . import file_exporter as fe
 
-    data = request.get_json(silent=True) or {}
-    text        = str(data.get("text", "")).strip()
-    fmt         = str(data.get("format", "txt")).lower()
-    template    = str(data.get("template", "libre")).lower()
-    filename    = str(data.get("filename", "documento")).strip()[:128] or "documento"
-    project_id  = data.get("project_id")
-    conv_id     = data.get("conversation_id")
+    data     = request.get_json(silent=True) or {}
+    text     = str(data.get("text", "")).strip()
+    fmt      = str(data.get("format", "txt")).lower()
+    template = str(data.get("template", "libre")).lower()
+    filename = str(data.get("filename", "documento")).strip()[:128] or "documento"
+    project_id = data.get("project_id")
+    conv_id    = data.get("conversation_id")
 
     if not text:
         return jsonify({"error": "El texto no puede estar vacío"}), 400
@@ -455,7 +460,6 @@ def api_export():
         if project is None:
             db.close()
             return jsonify({"error": "Proyecto no encontrado"}), 404
-
         filename_stored, _ = fe.save_output(
             file_bytes, fmt, display_name, project_id,
             current_app.config["OUTPUT_FOLDER"]
@@ -470,7 +474,6 @@ def api_export():
             "download_url": f"/api/outputs/{output_id}/download",
         }), 201
     else:
-        import io
         return Response(
             file_bytes,
             mimetype=mime,
@@ -486,7 +489,7 @@ def api_export():
 def api_download_output(output_id):
     from . import file_exporter as fe
 
-    db = get_db(current_app.config["DB_PATH"])
+    db     = get_db(current_app.config["DB_PATH"])
     output = models.get_output(db, output_id)
     if output is None:
         db.close()
@@ -502,18 +505,14 @@ def api_download_output(output_id):
         return jsonify({"error": "Archivo no encontrado en disco"}), 404
 
     mime = fe._mime(output["format"])
-    return send_file(
-        str(fpath),
-        mimetype=mime,
-        as_attachment=True,
-        download_name=output["display_name"],
-    )
+    return send_file(str(fpath), mimetype=mime, as_attachment=True,
+                     download_name=output["display_name"])
 
 
 @bp.route("/api/outputs/<int:output_id>", methods=["DELETE"])
 @login_required
 def api_delete_output(output_id):
-    db = get_db(current_app.config["DB_PATH"])
+    db     = get_db(current_app.config["DB_PATH"])
     output = models.get_output(db, output_id)
     if output is None:
         db.close()
