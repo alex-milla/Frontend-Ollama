@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Proyectos · Frontend Ollama{% endblock %}
+
+{% block body %}
+<div style="background:var(--bg-secondary);min-height:100vh;transition:background var(--transition);">
+<div class="admin-page">
+
+  <div class="admin-header">
+    <a class="admin-back" href="{{ url_for('chat.index') }}">← Volver al chat</a>
+    <h1>Proyectos</h1>
+    <div class="theme-toggle" style="margin-left:auto;">
+      <button class="theme-btn" data-theme-value="light">☀</button>
+      <button class="theme-btn" data-theme-value="dark">☾</button>
+      <button class="theme-btn" data-theme-value="system">⊙</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div style="display:flex;gap:8px;margin-bottom:24px;">
+    <button class="icon-btn tab-btn active" data-tab="projects">📁 Proyectos</button>
+    <button class="icon-btn tab-btn" data-tab="skills">⚡ Habilidades</button>
+  </div>
+
+  <!-- ── TAB: Proyectos ──────────────────────────────────────────────────── -->
+  <div id="tab-projects">
+    <section class="admin-section">
+      <h2 class="section-title">Mis proyectos</h2>
+      <div id="projects-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:20px;"></div>
+      <div style="border-top:1px solid var(--border);padding-top:20px;">
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px;">Nuevo proyecto</h3>
+        <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:10px;align-items:end;">
+          <div>
+            <label class="form-label">Nombre</label>
+            <input class="form-input" id="new-project-name" placeholder="Mi proyecto" maxlength="128">
+          </div>
+          <div>
+            <label class="form-label">Descripción</label>
+            <input class="form-input" id="new-project-desc" placeholder="Descripción opcional" maxlength="512">
+          </div>
+          <button class="btn-primary" style="padding:10px 20px;margin-top:0;" id="btn-create-project">Crear</button>
+        </div>
+        <div id="project-error" class="error-msg" style="display:none;margin-top:8px;"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── TAB: Habilidades ───────────────────────────────────────────────── -->
+  <div id="tab-skills" style="display:none;">
+    <section class="admin-section">
+      <h2 class="section-title">Mis habilidades</h2>
+      <div id="skills-list" style="margin-bottom:20px;"></div>
+      <div style="border-top:1px solid var(--border);padding-top:20px;">
+        <h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px;">Nueva habilidad</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label class="form-label">Nombre</label>
+            <input class="form-input" id="new-skill-name" placeholder="Analista de código" maxlength="128">
+          </div>
+          <div>
+            <label class="form-label">Descripción corta</label>
+            <input class="form-input" id="new-skill-desc" placeholder="Descripción opcional" maxlength="512">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label class="form-label">Contenido en Markdown (system prompt)</label>
+          <textarea class="form-input" id="new-skill-content" rows="8"
+            style="font-family:var(--font-mono);font-size:.83rem;resize:vertical;"
+            placeholder="# Analista de código&#10;&#10;Eres un experto analista de código. Tu objetivo es..."></textarea>
+        </div>
+        <button class="btn-primary" style="max-width:200px;" id="btn-create-skill">Crear habilidad</button>
+        <div id="skill-error" class="error-msg" style="display:none;margin-top:8px;"></div>
+      </div>
+    </section>
+  </div>
+
+</div>
+</div>
+
+<!-- Modal editar proyecto -->
+<div id="modal-project" class="modal-overlay" style="display:none;">
+  <div class="modal" style="max-width:480px;">
+    <h3>Editar proyecto</h3>
+    <input type="hidden" id="edit-project-id">
+    <div class="form-group" style="margin-top:12px;">
+      <label class="form-label">Nombre</label>
+      <input class="form-input" id="edit-project-name" maxlength="128">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Descripción</label>
+      <input class="form-input" id="edit-project-desc" maxlength="512">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Habilidades asignadas</label>
+      <div id="edit-project-skills" style="display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:var(--bg-secondary);border-radius:var(--radius-sm);border:1px solid var(--border);min-height:48px;"></div>
+      <p style="font-size:.75rem;color:var(--text-secondary);margin-top:4px;">Haz clic para activar/desactivar habilidades</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-sm" id="modal-project-cancel">Cancelar</button>
+      <button class="btn-sm danger" id="modal-project-delete">Eliminar</button>
+      <button class="btn-primary" style="padding:6px 16px;" id="modal-project-save">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal editar habilidad -->
+<div id="modal-skill" class="modal-overlay" style="display:none;">
+  <div class="modal" style="max-width:640px;width:100%;">
+    <h3>Editar habilidad</h3>
+    <input type="hidden" id="edit-skill-id">
+    <div class="form-group" style="margin-top:12px;">
+      <label class="form-label">Nombre</label>
+      <input class="form-input" id="edit-skill-name" maxlength="128">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Descripción</label>
+      <input class="form-input" id="edit-skill-desc" maxlength="512">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Contenido Markdown</label>
+      <textarea class="form-input" id="edit-skill-content" rows="10"
+        style="font-family:var(--font-mono);font-size:.83rem;resize:vertical;"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-sm" id="modal-skill-cancel">Cancelar</button>
+      <button class="btn-sm danger" id="modal-skill-delete">Eliminar</button>
+      <button class="btn-primary" style="padding:6px 16px;" id="modal-skill-save">Guardar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/projects.js') }}"></script>
+{% endblock %}

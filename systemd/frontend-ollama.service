@@ -1,0 +1,26 @@
+[Unit]
+Description=Frontend Ollama — Chat web con modelos Ollama
+Documentation=https://github.com/alex-milla/Frontend-Ollama
+After=network.target
+Wants=network.target
+
+[Service]
+User=frontollama
+Group=frontollama
+WorkingDirectory=/opt/frontend-ollama
+ExecStart=/opt/frontend-ollama/venv/bin/gunicorn \
+    --workers 2 \
+    --worker-class sync \
+    --timeout 120 \
+    --keep-alive 5 \
+    --bind unix:/opt/frontend-ollama/data/gunicorn.sock \
+    --access-logfile /var/log/frontend-ollama/access.log \
+    --error-logfile /var/log/frontend-ollama/error.log \
+    --log-level info \
+    "app:create_app()"
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
